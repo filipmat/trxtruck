@@ -125,3 +125,77 @@ def steering_input_to_angular_velocity(steering_input, linear_velocity):
 def sign(x):
     """Returns the sign of x. """
     return 1 if x >= 0 else - 1
+
+
+class Trx(object):
+
+    def __init__(self, x=None, u=None, ID='vehicle'):
+
+        if x is None:
+            x = [0., 0., 0., 0.]
+        self.x = x              # Vehicle state.
+
+        if u is None:
+            u = [0., 0.]
+        self.u = u              # Vehicle input.
+
+        self.ID = ID
+
+    def update(self, delta_t, throttle=None, steering=None):
+        """Updates the vehicle state. """
+
+        if throttle is not None:
+            self.set_throttle(throttle)
+
+        if steering is not None:
+            self.set_steering(steering)
+
+        self._move(delta_t)
+
+    def _move(self, delta_t):
+        """Moves the vehicle according to the system dynamics. """
+        self.x[0] = self.x[0] + delta_t * self.u[0] * math.cos(self.x[2])
+        self.x[1] = self.x[1] + delta_t * self.u[0] * math.sin(self.x[2])
+        self.x[2] = (self.x[2] + delta_t * self.u[1]) % (2 * math.pi)
+        self.x[3] = self.u[0]
+
+    def get_velocity(self):
+        """Returns the velocity of the vehicle. """
+        return self.x[3]
+
+    def get_x(self):
+        """Returns the current state. """
+        return self.x
+
+    def set_x(self, x):
+        """Sets the state. """
+        self.x = x
+
+    def get_u(self):
+        """Returns the current input. """
+        return self.u
+
+    def set_u(self, u):
+        """Sets the input. """
+        self.u = u
+
+    def get_vel(self):
+        """Returns the velocity. """
+        return self.x[3]
+
+    def set_throttle(self, throttle):
+        self.u[0] = throttle_input_to_linear_velocity(throttle)
+
+    def set_steering(self, steering):
+        self.u[1] = steering_input_to_angular_velocity(steering, self.x[3])
+
+    def __str__(self):
+        """Returns the current state in string format. """
+        s = 'ID = {}: x = ['.format(self.ID)
+        for x in self.x:
+            s += '{:.2f}, '.format(x)
+
+        s = s[:-2]
+        s += ']'
+
+        return s
