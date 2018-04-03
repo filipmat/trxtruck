@@ -9,7 +9,7 @@ import frenetpid
 import controllerGUI
 import trxmodel
 
-from trucksim.msg import MocapState, PWM
+from trxtruck.msg import MocapState, PWM
 
 
 class Controller(object):

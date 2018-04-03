@@ -5,7 +5,7 @@ Usage: rosrun trucksim mocap_publisher.py [vehicle_id]
 """
 
 import rospy
-from trucksim.msg import MocapState
+from trxtruck.msg import MocapState
 from mocap_source_2 import *
 
 import time

@@ -13,8 +13,8 @@ import rosbag
 import sys
 import os
 
-from trucksim.msg import VehicleState, MocapState, PWM
-from trucksim.srv import SetMeasurement
+from trxtruck.msg import VehicleState, MocapState, PWM
+from trxtruck.srv import SetMeasurement
 
 from geometry_msgs.msg import Twist
 

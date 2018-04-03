@@ -10,7 +10,7 @@ import rospy
 import curses
 import sys
 
-from trucksim.msg import PWM
+from trxtruck.msg import PWM
 
 
 class CursesControl(object):

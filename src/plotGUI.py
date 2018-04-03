@@ -17,7 +17,7 @@ import Tkinter as Tk
 import math
 import random
 
-from trucksim.msg import MocapState  # ROS topic for receiving data.
+from trxtruck.msg import MocapState  # ROS topic for receiving data.
 import path     # For displaying a reference path.
 
 

@@ -12,7 +12,7 @@ import math
 
 import trxmodel
 
-from trucksim.msg import MocapState, PWM
+from trxtruck.msg import MocapState, PWM
 from geometry_msgs.msg import Twist
 
 

@@ -17,7 +17,7 @@ import frenetpid
 import controllerGUI
 import trxmodel
 
-from trucksim.msg import MocapState, PWM, AssumedState, ControllerRun
+from trxtruck.msg import MocapState, PWM, AssumedState, ControllerRun
 
 # TODO: maybe have different update frequencies for path tracking and velocity control.
 

@@ -9,7 +9,7 @@
 import Tkinter as Tk
 
 import rospy
-from trucksim.msg import ControllerRun
+from trxtruck.msg import ControllerRun
 
 
 class GlobalRunGUI():

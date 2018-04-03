@@ -16,8 +16,8 @@ import frenetpid
 import solver_centralized_mpc
 import trxmodel
 
-from trucksim.msg import MocapState, PWM, ControllerRun
-from trucksim.srv import SetMeasurement
+from trxtruck.msg import MocapState, PWM, ControllerRun
+from trxtruck.srv import SetMeasurement
 
 
 class CentralizedMPC(object):

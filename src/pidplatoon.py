@@ -4,7 +4,7 @@ import rospy
 import sys
 import time
 
-from trucksim.msg import MocapState, PWM
+from trxtruck.msg import MocapState, PWM
 import path
 import frenetpid
 import trxmodel
