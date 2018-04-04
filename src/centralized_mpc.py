@@ -15,8 +15,9 @@ import path
 import frenetpid
 import solver_centralized_mpc
 import trxmodel
+import helper
 
-from trxtruck.msg import MocapState, PWM, ControllerRun
+from trxtruck.msg import MocapState, PWM, ControllerRun, Recording
 from trxtruck.srv import SetMeasurement
 
 
@@ -26,7 +27,7 @@ class CentralizedMPC(object):
                  vehicle_path, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
                  safety_distance, timegap, k_p, k_i, k_d,
                  xmin=None, xmax=None, umin=None, umax=None, vopt=None,
-                 recording_service_name='cmpc/set_measurement'):
+                 recording_service_name='cmpc/set_measurement', recording_filename='cmpc'):
 
         rospy.init_node('centralized_mpc', anonymous=True)
 
@@ -36,8 +37,8 @@ class CentralizedMPC(object):
         self.running = False                # If controller is running or not.
 
         self.recording = False
-        self.bag_filename_prefix = 'cmpc'
-        self.bag_filename = self.get_filename(self.bag_filename_prefix, '.bag', padding=2)
+        self.bag_filename_prefix = recording_filename
+        self.recorder = helper.RosbagRecorder(recording_filename, '.bag')
 
         # Variables for starting phase.
         self.starting_phase_duration = 2.
@@ -69,6 +70,7 @@ class CentralizedMPC(object):
         self.poses = dict()             # [x, y, yaw, v]
         self.speed_pwms = dict()        # Speed control signals.
         self.angle_pwms = dict()        # Wheel angle control signals.
+        self.gears = dict()
         self.first_callbacks = dict()   # If having received first position data in initialization.
 
         # Initialize dictionaries.
@@ -78,6 +80,7 @@ class CentralizedMPC(object):
             self.poses[vehicle_id] = [0, 0, 0, 0]
             self.speed_pwms[vehicle_id] = 1500
             self.angle_pwms[vehicle_id] = 1500
+            self.gears[vehicle_id] = 0
             self.first_callbacks[vehicle_id] = True
 
         # Publisher for controlling vehicles.
@@ -165,8 +168,11 @@ class CentralizedMPC(object):
                 timegap = (self.path_positions[self.vehicle_ids[i - 1]].get_position() - pos) / x[3]
 
             if self.recording:
-                # TODO: finish
-                self._record_data()
+                self._record_data(vehicle_id, rospy.get_time(), x[0], x[1], x[2], x[3], pos,
+                                  self.vopt.get_speed_at(pos), timegap, accelerations[i],
+                                  self.frenets[vehicle_id].get_y_error(),
+                                  self.speed_pwms[vehicle_id], self.angle_pwms[vehicle_id],
+                                  self.gears[vehicle_id])
 
             # Add entries to information string.
             if print_info:
@@ -307,10 +313,29 @@ class CentralizedMPC(object):
 
         self.stop()
 
-    def _record_data(self):
+    def _record_data(self, vehicle_id, time, x, y, yaw, v, pos, vref, timegap, acc, path_error,
+                     velocity_input, steering_input, gear):
+
         if self.recording:
+            msg = Recording()
+
+            msg.id = vehicle_id
+            msg.time = time
+            msg.x = x
+            msg.y = y
+            msg.yaw = yaw
+            msg.v = v
+            msg.pos = pos
+            msg.vref = vref
+            msg.timegap = timegap
+            msg.acc = acc
+            msg.path_error = path_error
+            msg.velocity_input = velocity_input
+            msg.steering_input = steering_input
+            msg.gear = gear
+
             try:
-                #self.bag.write('cmpc', tuple(self.vehicles_information))
+                self.recorder.write(msg, topic_name=vehicle_id)
                 pass
             except ValueError as e:
                 print('Error when writing to bag: {}'.format(e))
@@ -320,30 +345,29 @@ class CentralizedMPC(object):
 
         # Stop recording.
         if self.recording and not req.log:
-            self.stop_recording()
+            self._stop_recording()
 
         # Start recording.
         elif (not self.recording) and req.log:
-            self.start_recording()
+            self._start_recording()
 
         return True
 
-    def start_recording(self):
+    def _start_recording(self):
         """Starts the recording. """
         self.recording = True
 
-        self.bag_filename = self.get_filename(self.bag_filename_prefix, '.bag', padding=2)
-        self.bag = rosbag.Bag(self.bag_filename, 'w')
+        self.recorder.start()
 
-        print('Recording to {}.'.format(self.bag_filename))
+        print('Recording to {}.'.format(self.recorder.get_filename()))
 
-    def stop_recording(self):
+    def _stop_recording(self):
         """Stops the recording. """
         self.recording = False
 
         try:
-            self.bag.close()
-            print('Recording finished in {}.'.format(self.bag_filename))
+            self.recorder.stop()
+            print('Recording finished in {}.'.format(self.recorder.get_filename()))
         except NameError as e:
             print('Error when stopping recording: {}'.format(e))
 
@@ -380,6 +404,9 @@ def main(args):
 
     # Name for starting and stopping recording.
     recording_service_name = 'cmpc/set_measurement'
+
+    # Filename prefix for recording data.
+    recording_filename = 'cmpc' + '_' + '_'.join(vehicle_ids) + '_'
 
     # PID parameters for path tracking.
     k_p = 0.5
@@ -433,7 +460,8 @@ def main(args):
     mpc = CentralizedMPC(position_topic_name, control_topic_name, vehicle_ids,
                          pt, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
                          safety_distance, timegap, k_p, k_i, k_d, xmin=xmin, xmax=xmax, umin=umin,
-                         umax=umax, vopt=vopt, recording_service_name=recording_service_name)
+                         umax=umax, vopt=vopt, recording_service_name=recording_service_name,
+                         recording_filename=recording_filename)
 
     mpc.run()
 
