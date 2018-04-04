@@ -17,6 +17,9 @@ import speed_profile
 import frenetpid
 import solver_distributed_mpc
 import trxmodel
+import helper
+
+from trxtruck.msg import Recording
 
 
 class DistributedMPC(object):
@@ -42,11 +45,13 @@ class DistributedMPC(object):
         self.h = horizon
 
         # Matrices for storing control errors etc.
-        self.timestamps = self.dt*numpy.arange(self.iterations)
+        self.timestamps = numpy.zeros((self.n, self.iterations))
         self.xx = numpy.zeros((self.n, self.iterations))
         self.yy = numpy.zeros((self.n, self.iterations))
+        self.yaws = numpy.zeros((self.n, self.iterations))
         self.positions = numpy.zeros((self.n, self.iterations))
         self.velocities = numpy.zeros((self.n, self.iterations))
+        self.velocity_references = numpy.zeros((self.n, self.iterations))
         self.accelerations = numpy.zeros((self.n, self.iterations))
         self.timegaps = numpy.zeros((self.n, self.iterations))
         self.path_errors = numpy.zeros((self.n, self.iterations))
@@ -118,10 +123,12 @@ class DistributedMPC(object):
         for i, vehicle in enumerate(self.vehicles):
             # Get velocity from acceleration and velocity control input from vehicle model.
             x = vehicle.get_x()
+
             pos = self.path_positions[i].get_position()
 
             x0 = [x[3], pos]
 
+            # Update current state.
             self.assumed_velocities[i, 0:-(self.h + 1)] = self.assumed_velocities[i, 1:-self.h]
             self.assumed_positions[i, 0:-(self.h + 1)] = self.assumed_positions[i, 1:-self.h]
             self.assumed_timestamps[i, 0:-(self.h + 1)] = self.assumed_timestamps[i, 1:-self.h]
@@ -130,6 +137,7 @@ class DistributedMPC(object):
             self.assumed_positions[i, -(self.h + 1)] = pos
             self.assumed_timestamps[i, -(self.h + 1)] = self.k*self.dt
 
+            # Solve MPC.
             if i == 0:
                 self.mpcs[i].solve_mpc(self.vopt, x0)
             else:
@@ -138,6 +146,15 @@ class DistributedMPC(object):
                                        self.assumed_velocities[i - 1],
                                        self.assumed_positions[i - 1])
 
+            velocities, positions = self.mpcs[i].get_predicted_states()
+
+            # Update assumed state.
+            self.assumed_velocities[i, -(self.h + 1):] = velocities
+            self.assumed_positions[i, -(self.h + 1):] = positions
+            self.assumed_timestamps[i, -(self.h + 1):] = \
+                self.assumed_timestamps[i, -(self.h + 1)] + self.dt * numpy.arange(self.h + 1)
+
+            # Get velocity control signal.
             acceleration = self.mpcs[i].get_instantaneous_acceleration()
 
             v = self._get_vel(i, acceleration)
@@ -148,24 +165,21 @@ class DistributedMPC(object):
             self.angle_pwms[i] = trxmodel.angular_velocity_to_steering_input(omega, x[3])
 
             vehicle.update(self.dt, self.speed_pwms[i], self.angle_pwms[i])
+            x = vehicle.get_x()
             self.path_positions[i].update_position([x[0], x[1]])
-
-            velocities, positions = self.mpcs[i].get_predicted_states()
-
-            self.assumed_velocities[i, -(self.h + 1):] = velocities
-            self.assumed_positions[i, -(self.h + 1):] = positions
-            self.assumed_timestamps[i, -(self.h + 1):] = \
-                self.assumed_timestamps[i, -(self.h + 1)] + self.dt * numpy.arange(self.h + 1)
 
             # Store information.
             timegap = 0
             if i > 0 and vehicle.get_vel() != 0:
                 timegap = (self.path_positions[i - 1].get_position() - pos) / x[3]
 
+            self.timestamps[i, self.k] = self.assumed_timestamps[i, -(self.h + 1)]
             self.xx[i, self.k] = x[0]
             self.yy[i, self.k] = x[1]
+            self.yaws[i, self.k] = x[2]
             self.positions[i, self.k] = pos
             self.velocities[i, self.k] = x[3]
+            self.velocity_references[i, self.k] = self.vopt.get_speed_at(pos)
             self.accelerations[i, self.k] = acceleration
             self.timegaps[i, self.k] = timegap
             self.path_errors[i, self.k] = self.frenets[i].get_y_error()
@@ -280,6 +294,37 @@ class DistributedMPC(object):
         with open(name, 'w+') as datafile_id:
             numpy.savetxt(datafile_id, data, fmt='%.4f', header=header, delimiter=',')
 
+    def save_data_as_rosbag(self, filename):
+        """Save data to rosbag file. """
+        recorder = helper.RosbagRecorder(filename, '.bag')
+        recorder.start()
+
+        print('Recording data to {} ...'.format(recorder.get_filename()))
+
+        for j, vehicle in enumerate(self.vehicles):
+
+            msg = Recording()
+            msg.id = vehicle.ID
+            for i in range(self.iterations):
+
+                msg.time = self.timestamps[j, i]
+                msg.x = self.xx[j, i]
+                msg.y = self.yy[j, i]
+                msg.yaw = self.yaws[j, i]
+                msg.v = self.velocities[j, i]
+                msg.pos = self.positions[j, i]
+                msg.vref = self.velocity_references[j, i]
+                msg.timegap = self.timegaps[j, i]
+                msg.acc = self.accelerations[j, i]
+                msg.path_error = self.path_errors[j, i]
+                msg.velocity_input = int(self.speed_inputs[j, i])
+                msg.steering_input = int(self.steering_inputs[j, i])
+                msg.gear = 0
+
+                recorder.write(msg, topic_name=vehicle.ID)
+
+        recorder.stop()
+
     @staticmethod
     def _get_filename(prefix, suffix, padding=2):
         """Sets a filename on the form filename_prefixZ.bag where Z is the first free number.
@@ -301,6 +346,7 @@ def main(args):
 
     if len(args) > 1:
         vehicle_ids = args[1:]
+        print(vehicle_ids)
     else:
         print('Need to enter at least one vehicle ID. ')
         sys.exit()
@@ -314,7 +360,7 @@ def main(args):
     delta_t = 0.1
     Ad = numpy.matrix([[1., 0.], [delta_t, 1.]])
     Bd = numpy.matrix([[delta_t], [0.]])
-    zeta = 0.9
+    zeta = 0.25
     Q_v = 1  # Part of Q matrix for velocity tracking.
     Q_s = 1  # Part of Q matrix for position tracking.
     Q = numpy.array([Q_v, 0, 0, Q_s]).reshape(2, 2)  # State tracking.
@@ -330,7 +376,7 @@ def main(args):
     safety_distance = 0.2
     timegap = 1.
 
-    simulation_length = 40  # How many seconds to simulate.
+    simulation_length = 10  # How many seconds to simulate.
 
     xmin = numpy.array([velocity_min, position_min])
     xmax = numpy.array([velocity_max, position_max])
@@ -353,7 +399,8 @@ def main(args):
     center = [0.2, -y_radius / 2]
     pts = 400
 
-    save_data = False
+    save_data = True
+    filename = 'sim_dmpc' + '_' + '_'.join(vehicle_ids) + '_'
 
     pt = path.Path()
     pt.gen_circle_path([x_radius, y_radius], points=pts, center=center)
@@ -361,7 +408,7 @@ def main(args):
     vehicles = []
     for vehicle_id in vehicle_ids:
         x = [center[0], center[1] + y_radius, math.pi, 0]
-        #x = [0, 0, math.pi, 0]
+        # x = [0, 0, math.pi, 0]
         vehicles.append(trxmodel.Trx(x=x, ID=vehicle_id))
 
     mpc = DistributedMPC(vehicles, pt, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
@@ -371,9 +418,9 @@ def main(args):
     mpc.run()
 
     if save_data:
-        mpc.save_data('sim_dmpc')
+        mpc.save_data_as_rosbag(filename)
 
-    mpc.plot_stuff()
+    # mpc.plot_stuff()
 
 
 if __name__ == '__main__':
