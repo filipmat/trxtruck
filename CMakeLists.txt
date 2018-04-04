@@ -55,6 +55,7 @@ add_message_files(
     VehicleState.msg
     AssumedState.msg
     ControllerRun.msg
+    Recording.msg
 )
 
 ## Generate services in the 'srv' folder

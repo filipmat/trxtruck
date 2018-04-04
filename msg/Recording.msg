@@ -1,0 +1,14 @@
+string id
+float32 time
+float32 x
+float32 y
+float32 yaw
+float32 v
+float32 pos
+float32 vref
+float32 timegap
+float32 acc
+float32 path_error
+int32 velocity_input
+int32 steering_input
+int32 gear
