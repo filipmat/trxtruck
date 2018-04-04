@@ -17,6 +17,9 @@ import speed_profile
 import frenetpid
 import solver_centralized_mpc
 import trxmodel
+import helper
+
+from trxtruck.msg import Recording
 
 
 class CentralizedMPC(object):
@@ -44,11 +47,13 @@ class CentralizedMPC(object):
         self.n = len(vehicles)
 
         # Matrices for storing control errors etc.
-        self.timestamps = self.dt*numpy.arange(self.iterations)
+        self.timestamps = numpy.kron(numpy.ones((self.n, 1)), self.dt*numpy.arange(self.iterations))
         self.xx = numpy.zeros((self.n, self.iterations))
         self.yy = numpy.zeros((self.n, self.iterations))
+        self.yaws = numpy.zeros((self.n, self.iterations))
         self.positions = numpy.zeros((self.n, self.iterations))
         self.velocities = numpy.zeros((self.n, self.iterations))
+        self.velocity_references = numpy.zeros((self.n, self.iterations))
         self.accelerations = numpy.zeros((self.n, self.iterations))
         self.timegaps = numpy.zeros((self.n, self.iterations))
         self.path_errors = numpy.zeros((self.n, self.iterations))
@@ -125,8 +130,10 @@ class CentralizedMPC(object):
 
             self.xx[i, self.k] = x[0]
             self.yy[i, self.k] = x[1]
+            self.yaws[i, self.k] = x[2]
             self.positions[i, self.k] = pos
             self.velocities[i, self.k] = x[3]
+            self.velocity_references[i, self.k] = self.vopt.get_speed_at(pos)
             self.accelerations[i, self.k] = accelerations[i]
             self.timegaps[i, self.k] = timegap
             self.path_errors[i, self.k] = self.frenets[i].get_y_error()
@@ -196,8 +203,8 @@ class CentralizedMPC(object):
         ax.set_xlabel('s')
         ax.set_ylabel('gap')
         for i in range(len(self.vehicles)):
-            pyplot.plot(self.timestamps, self.timegaps[i], label=self.vehicles[i].ID)
-        pyplot.plot(self.timestamps, numpy.ones(len(self.timestamps))*self.timegap,
+            pyplot.plot(self.timestamps[i], self.timegaps[i], label=self.vehicles[i].ID)
+        pyplot.plot(self.timestamps[0], numpy.ones(len(self.timestamps[0]))*self.timegap,
                     label='reference')
         pyplot.legend(loc='upper right')
 
@@ -214,7 +221,7 @@ class CentralizedMPC(object):
         ax = pyplot.subplot(323)
         ax.set_title('Speed time')
         for i in range(len(self.vehicles)):
-            pyplot.plot(self.timestamps, self.velocities[i], label=self.vehicles[i].ID)
+            pyplot.plot(self.timestamps[i], self.velocities[i], label=self.vehicles[i].ID)
         pyplot.legend(loc='upper right')
 
         ax = pyplot.subplot(324)
@@ -230,7 +237,7 @@ class CentralizedMPC(object):
     def save_data(self, filename):
         """Save data to file. """
 
-        name = self._get_filename(filename, '.txt')
+        name = helper.get_unique_filename(filename, '.txt')
 
         print('Saving data to {} ...'.format(name))
 
@@ -249,21 +256,36 @@ class CentralizedMPC(object):
         with open(name, 'w+') as datafile_id:
             numpy.savetxt(datafile_id, data, fmt='%.4f', header=header, delimiter=',')
 
-    @staticmethod
-    def _get_filename(prefix, suffix, padding=2):
-        """Sets a filename on the form filename_prefixZ.bag where Z is the first free number.
-        Pads with zeros, e.g. first free number 43 and padding=5 will give 00043. """
-        __location__ = os.path.realpath(os.path.join(os.getcwd(), os.path.dirname(__file__)))
+    def save_data_as_rosbag(self, filename):
+        """Save data to rosbag file. """
+        recorder = helper.RosbagRecorder(filename, '.bag')
+        recorder.start()
 
-        i = 0
-        while os.path.exists(os.path.join(__location__, '{}{}{}'.format(
-                prefix, str(i).zfill(padding), suffix))):
-            i += 1
+        print('Recording data to {} ...'.format(recorder.get_filename()))
 
-        filename = os.path.join(__location__, '{}{}{}'.format(
-            prefix, str(i).zfill(padding), suffix))
+        for j, vehicle in enumerate(self.vehicles):
 
-        return filename
+            msg = Recording()
+            msg.id = vehicle.ID
+            for i in range(self.iterations):
+
+                msg.time = self.timestamps[j, i]
+                msg.x = self.xx[j, i]
+                msg.y = self.yy[j, i]
+                msg.yaw = self.yaws[j, i]
+                msg.v = self.velocities[j, i]
+                msg.pos = self.positions[j, i]
+                msg.vref = self.velocity_references[j, i]
+                msg.timegap = self.timegaps[j, i]
+                msg.acc = self.accelerations[j, i]
+                msg.path_error = self.path_errors[j, i]
+                msg.velocity_input = int(self.speed_inputs[j, i])
+                msg.steering_input = int(self.steering_inputs[j, i])
+                msg.gear = 0
+
+                recorder.write(msg, topic_name=vehicle.ID)
+
+        recorder.stop()
 
 
 def main(args):
@@ -299,7 +321,7 @@ def main(args):
     safety_distance = 0.2
     timegap = 1.
 
-    simulation_length = 40  # How many seconds to simulate.
+    simulation_length = 20  # How many seconds to simulate.
 
     xmin = numpy.array([velocity_min, position_min])
     xmax = numpy.array([velocity_max, position_max])
@@ -314,7 +336,6 @@ def main(args):
     vopt = speed_profile.Speed()
     vopt.generate_sin(opt_v_min, opt_v_max, opt_v_period_length, opt_v_pts)
     vopt.repeating = True
-    # vopt = speed_profile.Speed([1], [1])
 
     # Controller reference path.
     x_radius = 1.4
@@ -323,6 +344,7 @@ def main(args):
     pts = 400
 
     save_data = True
+    filename = 'sim_cmpc' + '_' + '_'.join(vehicle_ids) + '_'
 
     pt = path.Path()
     pt.gen_circle_path([x_radius, y_radius], points=pts, center=center)
@@ -339,7 +361,7 @@ def main(args):
     mpc.run()
 
     if save_data:
-        mpc.save_data('sim_cmpc')
+        mpc.save_data_as_rosbag(filename)
 
     mpc.plot_stuff()
 
