@@ -383,7 +383,7 @@ def main(args):
 
     # PID parameters for path tracking.
     k_p = 0.5
-    k_i = 0.001
+    k_i = 0
     k_d = 3
 
     horizon = 20
