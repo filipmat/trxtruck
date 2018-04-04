@@ -371,22 +371,6 @@ class CentralizedMPC(object):
         except NameError as e:
             print('Error when stopping recording: {}'.format(e))
 
-    @staticmethod
-    def get_filename(prefix, suffix, padding=0):
-        """Sets a filename on the form filename_prefixZ.bag where Z is the first free number.
-        Pads with zeros, e.g. first free number 43 and padding=5 will give 00043. """
-        __location__ = os.path.realpath(os.path.join(os.getcwd(), os.path.dirname(__file__)))
-
-        i = 0
-        while os.path.exists(os.path.join(__location__, '{}{}{}'.format(
-                prefix, str(i).zfill(padding), suffix))):
-            i += 1
-
-        filename = os.path.join(__location__, '{}{}{}'.format(
-            prefix, str(i).zfill(padding), suffix))
-
-        return filename
-
 
 def main(args):
 
