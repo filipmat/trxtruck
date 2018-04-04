@@ -14,12 +14,9 @@ import speed_profile
 import path
 import solver_distributed_mpc
 import frenetpid
-import controllerGUI
 import trxmodel
 
 from trxtruck.msg import MocapState, PWM, AssumedState, ControllerRun
-
-# TODO: maybe have different update frequencies for path tracking and velocity control.
 
 
 class Controller(object):
@@ -255,9 +252,6 @@ class Controller(object):
 
     def _get_steering_input(self):
         """Returns the steering command. Calculated from Frenet path tracker and vehicle model. """
-        # TODO: try using beleived velocity (from self.speed_pwm) instead of real (self.pose[3]).
-        speed = trxmodel.throttle_input_to_linear_velocity(self.speed_pwm)
-
         omega = self.frenet.get_omega(self.pose[0], self.pose[1], self.pose[2], self.pose[3])
         steering_command = trxmodel.angular_velocity_to_steering_input(omega, self.pose[3])
 
@@ -373,7 +367,7 @@ def main(args):
     k_d = 3
 
     # MPC information.
-    horizon = 5
+    horizon = 10
     delta_t = 0.1
     Ad = numpy.matrix([[1., 0.], [delta_t, 1.]])
     Bd = numpy.matrix([[delta_t], [0.]])
@@ -430,7 +424,6 @@ def main(args):
 
     # Start controller.
     controller.run()
-    #controllerGUI.ControllerGUI(controller)
 
 
 if __name__ == '__main__':
