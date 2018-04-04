@@ -15,8 +15,12 @@ import path
 import solver_distributed_mpc
 import frenetpid
 import trxmodel
+import helper
 
-from trxtruck.msg import MocapState, PWM, AssumedState, ControllerRun
+from trxtruck.msg import MocapState, PWM, AssumedState, ControllerRun, Recording
+from trxtruck.srv import SetMeasurement
+
+# TODO: make printing and recording more structured in control().
 
 
 class Controller(object):
@@ -25,7 +29,8 @@ class Controller(object):
                  is_leader, vehicle_path, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
                  safety_distance, timegap,
                  xmin=None, xmax=None, umin=None, umax=None, x0=None, vopt=None,
-                 k_p=0., k_i=0., k_d=0.):
+                 k_p=0., k_i=0., k_d=0., recording_service_name='dmpc/set_measurement',
+                 recording_filename='dmpc'):
 
         self.vehicle_id = vehicle_id    # ID of the vehicle.
         self.dt = delta_t
@@ -35,6 +40,9 @@ class Controller(object):
         rospy.init_node(self.vehicle_id + '_mpc', anonymous=True)
 
         self.is_leader = is_leader      # True if the vehicle is the leader.
+
+        self.recording = False
+        self.recorder = helper.RosbagRecorder(recording_filename, '.bag')
 
         self.pose = [0, 0, 0, 0]            # Store most recent vehicle pose.
         self.timestamp = rospy.get_time()   # Store the timestamp for the saved pose.
@@ -65,6 +73,7 @@ class Controller(object):
         self.speed_pwm = 1500
         self.angle_pwm = 1500
         self.gear_pwm = 120     # Currently unused.
+        self.gear = 0
 
         self.pwm_max = 1900
         self.pwm_min = 1500
@@ -102,6 +111,9 @@ class Controller(object):
 
         # Subscriber for starting and stopping the controller.
         rospy.Subscriber('global/run', ControllerRun, self._start_stop_callback)
+
+        # Service for starting or stopping recording.
+        rospy.Service(recording_service_name, SetMeasurement, self._set_measurement)
 
         # MPC controller for speed control.
         self.mpc = solver_distributed_mpc.MPC(Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
@@ -204,6 +216,14 @@ class Controller(object):
 
             self._publish_control_commands()
 
+            timegap = 0
+            if not self.is_leader:
+                try:
+                    timegap = (self.preceding_positions[-(self.h + 1)] -
+                               self.path_position.get_position()) / self.pose[3]
+                except ZeroDivisionError:
+                    timegap = 0
+
             # Print stuff.
             if self.k % self.print_interval_samples == 0 and self.verbose:
                 avg_time = (rospy.get_time() - self.last_print_time) / self.print_interval_samples
@@ -212,18 +232,22 @@ class Controller(object):
 
                 info = 'v = {:.2f} ({:.2f}), a = {:5.2f}, pwm = {:.1f}, avg_t = {:.3f}'.format(
                     self.pose[3], opt_v, acc, self.speed_pwm, avg_time)
-
                 if not self.is_leader:
-                    try:
-                        timegap = (self.preceding_positions[-(self.h + 1)] -
-                                   self.path_position.get_position()) / self.pose[3]
-                    except ZeroDivisionError:
-                        timegap = 0
                     info += ', t = {:.2f}'.format(timegap)
 
                 print(info)
 
                 self.last_print_time = rospy.get_time()
+
+            # Record stuff.
+            if self.recording:
+                pos = self.path_position.get_position()
+                
+                self._record_data(self.vehicle_id, rospy.get_time(), self.pose[0], self.pose[1],
+                                  self.pose[2], self.pose[3], pos, self.vopt.get_speed_at(pos),
+                                  timegap, self.mpc.get_instantaneous_acceleration(),
+                                  self.frenet.get_y_error(), self.angle_pwm, self.speed_pwm,
+                                  self.gear)
 
         self.k += 1
 
@@ -331,6 +355,64 @@ class Controller(object):
 
         self.stop()
 
+    def _record_data(self, vehicle_id, time, x, y, yaw, v, pos, vref, timegap, acc, path_error,
+                     velocity_input, steering_input, gear):
+
+        if self.recording:
+            msg = Recording()
+
+            msg.id = vehicle_id
+            msg.time = time
+            msg.x = x
+            msg.y = y
+            msg.yaw = yaw
+            msg.v = v
+            msg.pos = pos
+            msg.vref = vref
+            msg.timegap = timegap
+            msg.acc = acc
+            msg.path_error = path_error
+            msg.velocity_input = int(velocity_input)
+            msg.steering_input = int(steering_input)
+            msg.gear = int(gear)
+
+            try:
+                self.recorder.write(msg, topic_name=vehicle_id)
+                pass
+            except ValueError as e:
+                print('Error when writing to bag: {}'.format(e))
+
+    def _set_measurement(self, req):
+        """Service callback to start and stop recording. """
+
+        # Stop recording.
+        if self.recording and not req.log:
+            self._stop_recording()
+
+        # Start recording.
+        elif (not self.recording) and req.log:
+            self._start_recording()
+
+        return True
+
+    def _start_recording(self):
+        """Starts the recording. """
+        self.recording = True
+
+        self.recorder.start()
+
+        print('Recording to {}.'.format(self.recorder.get_filename()))
+
+    def _stop_recording(self):
+        """Stops the recording. """
+        self.recording = False
+
+        try:
+            self.recorder.stop()
+            print('Recording finished in {}.'.format(self.recorder.get_filename()))
+        except NameError as e:
+            print('Error when stopping recording: {}'.format(e))
+
 
 def print_numpy(a):
     s = '['
@@ -360,6 +442,12 @@ def main(args):
 
     # Topic name for publishing vehicle commands.
     control_topic_name = 'pwm_commands'
+
+    # Name for starting and stopping recording.
+    recording_service_name = vehicle_id + '/dmpc/set_measurement'
+
+    # Filename prefix for recording data.
+    recording_filename = 'dmpc' + '_' + vehicle_id + '_'
 
     # PID parameters for path tracking.
     k_p = 0.5
@@ -400,7 +488,6 @@ def main(args):
     opt_v_max = 1.2
     opt_v_min = 0.8
     opt_v_period_length = 60    # Period in meters.
-    # vopt = speed_profile.Speed([1], [1])
     vopt = speed_profile.Speed()
     vopt.generate_sin(opt_v_min, opt_v_max, opt_v_period_length, opt_v_pts)
     vopt.repeating = True
@@ -419,7 +506,8 @@ def main(args):
         position_topic_name, control_topic_name, vehicle_id, preceding_id, is_leader,
         pt, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length, safety_distance, timegap,
         vopt=vopt, xmin=xmin, xmax=xmax, umin=umin, umax=umax, x0=x0,
-        k_p=k_p, k_i=k_i, k_d=k_d
+        k_p=k_p, k_i=k_i, k_d=k_d, recording_service_name=recording_service_name,
+        recording_filename=recording_filename
     )
 
     # Start controller.
