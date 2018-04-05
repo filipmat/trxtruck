@@ -104,6 +104,10 @@ class DistributedMPC(object):
 
         while self.k < self.iterations:
             self._control()
+
+            if self.k % int(5./self.dt) == 0:
+                print('Iteration {}/{}'.format(self.k, self.iterations))
+                
             self.k += 1
 
         elapsed_time = time.time() - start_time
