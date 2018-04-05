@@ -87,6 +87,8 @@ class CentralizedMPC(object):
 
         while self.k < self.iterations:
             self._control()
+            if self.k % int(5./self.dt) == 0:
+                print('Iteration {}/{}'.format(self.k, self.iterations))
             self.k += 1
 
         elapsed_time = time.time() - start_time
@@ -321,7 +323,7 @@ def main(args):
     safety_distance = 0.2
     timegap = 1.
 
-    simulation_length = 20  # How many seconds to simulate.
+    simulation_length = 100  # How many seconds to simulate.
 
     xmin = numpy.array([velocity_min, position_min])
     xmax = numpy.array([velocity_max, position_max])
