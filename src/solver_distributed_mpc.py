@@ -46,24 +46,16 @@ class MPC(object):
         self.status = 'OK'  # Status of solver.
 
         if xmin is None:
-            self.xmin = -self.inf*numpy.ones(self.nx)  # No min state limit.
-        else:
-            self.xmin = xmin
+            xmin = -self.inf*numpy.ones(self.nx)  # No min state limit.
 
         if xmax is None:
-            self.xmax = self.inf*numpy.ones(self.nx)  # No max state limit.
-        else:
-            self.xmax = xmax
+            xmax = self.inf*numpy.ones(self.nx)  # No max state limit.
 
         if umin is None:
-            self.umin = -self.inf*numpy.ones(self.nu)  # No min input limit.
-        else:
-            self.umin = umin
+            umin = -self.inf*numpy.ones(self.nu)  # No min input limit.
 
         if umax is None:
-            self.umax = self.inf*numpy.ones(self.nu)  # No max input limit.
-        else:
-            self.umax = umax
+            umax = self.inf*numpy.ones(self.nu)  # No max input limit.
 
         if x0 is None:
             self.x0 = numpy.zeros(self.nx)  # Origin default initial condition.
@@ -71,19 +63,17 @@ class MPC(object):
             self.x0 = x0
 
         # Reference trajectories.
-        self.xref = numpy.zeros((self.h + 1)*self.nx)
-        self.uref = numpy.zeros(self.h*self.nu)
         self.xgapref = numpy.zeros((self.h + 1) * self.nx)
 
         # Problem.
         self.prob = cvxpy.Problem(cvxpy.Minimize(1))
 
         # Problem constraints.
-        state_constraint_lower = self._get_lower_state_constraints()    # Fixed
-        state_constraint_upper = self._get_upper_state_constraints()    # Fixed
-        input_constraint_lower, input_constraint_upper = self._get_input_constraints()    # Fixed.
+        state_constraint_lower = self._get_lower_state_constraints(xmin)
+        state_constraint_upper = self._get_upper_state_constraints(xmax)
+        input_constraint_lower, input_constraint_upper = self._get_input_constraints(umin, umax)
         dynamics_constraints1 = self._get_x0_constraint()       # Update during mpc.
-        dynamics_constraints2 = self._get_dynamics_constraints()       # Fixed.
+        dynamics_constraints2 = self._get_dynamics_constraints()
         slack_constraint_v, slack_constraint_safety = self._get_slack_constraints()
 
         self.prob.constraints = state_constraint_lower
@@ -109,28 +99,28 @@ class MPC(object):
 
         self.timegap_shift = int(round(self.timegap / self.dt))
 
-    def _get_lower_state_constraints(self):
+    def _get_lower_state_constraints(self, xmin):
         """Returns the lower constraints for the states. Called on initialization. """
         AX = sparse.eye((self.h + 1) * self.nx)
-        lower = numpy.tile(self.xmin, self.h + 1)
+        lower = numpy.tile(xmin, self.h + 1)
 
         return [AX * self.x >= lower]
 
-    def _get_upper_state_constraints(self):
+    def _get_upper_state_constraints(self, xmax):
         """Returns the upper constraints for the states. Includes the slack variable for velocity
         limitation. Called on initialization. """
         AX = sparse.kron(sparse.eye(self.h + 1), [1, 0])
-        upper = numpy.tile(self.xmax[0], self.h + 1)
+        upper = numpy.tile(xmax[0], self.h + 1)
 
         return [AX*self.x - self.v_slack <= upper]
 
-    def _get_input_constraints(self):
+    def _get_input_constraints(self, umin, umax):
         """Returns the constraints corrseponding to input limits. Called on initialization. """
         AU = numpy.eye(self.h*self.nu)
-        upper = numpy.tile(self.umax, self.h)
-        lower = numpy.tile(self.umin, self.h)
+        lower = numpy.tile(umin, self.h)
+        upper = numpy.tile(umax, self.h)
 
-        return [AU * self.u <= upper], [AU * self.u >= lower]
+        return [AU * self.u >= lower], [AU * self.u <= upper]
 
     def _get_x0_constraint(self):
         """Returns the constraints specifying that x(0) = x0. Called each iteration. """
@@ -180,21 +170,29 @@ class MPC(object):
         current state. If the vehicle is a follower it also computes the state reference from the
         timegap. Updates the constraints and cost and solves the problem. """
         self.x0 = x0
-        self._compute_references(self.x0[1], vopt)
+        xref, uref = self._get_x_u_references(self.x0[1], vopt)
 
         if not (self.is_leader or
                 current_time is None or
                 preceding_timestamps is None or
                 preceding_velocities is None or
                 preceding_positions is None):
-            self._compute_xgap_ref(current_time, preceding_timestamps, preceding_velocities,
-                                   preceding_positions)
+
+            # current_time = 0
+            # preceding_timestamps = self.dt * numpy.arange(len(preceding_timestamps)) - \
+            #     self.dt * len(preceding_timestamps)
+
+            xgapref = self._get_xgap_ref(current_time, preceding_timestamps, preceding_velocities,
+                                         preceding_positions)
             self._update_safety_constraints(current_time, preceding_timestamps,
                                             preceding_positions)
 
+            cost = self._get_mpc_cost(xref, uref, xgapref)
+        else:
+            cost = self._get_mpc_cost(xref, uref)
+
         self._update_x0_constraint()
 
-        cost = self._get_mpc_cost()
         self.prob.objective = cvxpy.Minimize(cost)
 
         try:
@@ -216,14 +214,16 @@ class MPC(object):
                                                                     preceding_timestamps,
                                                                     preceding_positions)[0]
 
-    def _compute_references(self, s0, v_opt):
+    def _get_x_u_references(self, s0, v_opt):
         """Computes the different reference signals. """
         pos_ref = self._get_pos_ref(s0, v_opt)
         vel_ref = self._compute_vel_ref(v_opt, pos_ref)
         acc_ref = self._compute_acc_ref(vel_ref)
 
-        self.xref = self._interleave_vectors(vel_ref, pos_ref)
-        self.uref = acc_ref[:]
+        xref = self._interleave_vectors(vel_ref, pos_ref)
+        uref = acc_ref[:]
+
+        return xref, uref
 
     def _get_pos_ref(self, s0, v_opt):
         """Computes the position reference trajectory. """
@@ -247,29 +247,31 @@ class MPC(object):
 
         return acc_ref
 
-    def _get_mpc_cost(self):
+    def _get_mpc_cost(self, xref, uref, xgapref=None):
         """Returns the mpc cost for the current iteration. """
         cost = 0.5*cvxpy.quad_form(self.x, self.state_P) + \
-               self.state_Q_diag.dot(self.xref)*self.x + \
+               self.state_Q_diag.dot(xref)*self.x + \
                0.5*cvxpy.quad_form(self.u, self.input_P) + \
-               self.R_diag.dot(self.uref)*self.u + \
+               self.R_diag.dot(uref)*self.u + \
                cvxpy.quad_form(self.v_slack, self.v_slack_P) + \
                cvxpy.quad_form(self.safety_slack, self.safety_slack_P)
 
-        if not self.is_leader:
-            timegap_q = self.timegap_Q_diag.dot(self.xgapref)
+        if not self.is_leader and xgapref is not None:
+            timegap_q = self.timegap_Q_diag.dot(xgapref)
 
             cost = cost + 0.5*cvxpy.quad_form(self.x, self.timegap_P) + timegap_q*self.x
 
         return cost
 
-    def _compute_xgap_ref(self, current_time, timestamps, velocities, positions):
+    def _get_xgap_ref(self, current_time, timestamps, velocities, positions):
         """Returns the reference state for tracking the timegap of the preceding vehicle. """
         target_time = current_time - self.timegap + numpy.arange(self.h + 1)*self.dt
         gap_vel = numpy.interp(target_time, timestamps, velocities)
         gap_pos = numpy.interp(target_time, timestamps, positions)
 
-        self.xgapref = self._interleave_vectors(gap_vel, gap_pos)
+        xgapref = self._interleave_vectors(gap_vel, gap_pos)
+
+        return xgapref
 
     def get_instantaneous_acceleration(self):
         """Returns the optimal acceleration for the current time instant.
