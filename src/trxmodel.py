@@ -12,14 +12,15 @@ throttle_max = 1990
 
 angle_to_steering_left_k = [1459, -87.2, -1633]
 angle_to_steering_right_k = [1642, -145, 1274]
-speed_to_throttle_k = [1576, 33.4, 137]
+speed_to_throttle_k_0 = [1576, 33.4, 137]   # Gear 0.
+speed_to_throttle_k_1 = [1576, 33.4, 137]   # Gear 1.
 
 steering_to_angle_left_k = [-1.25217, 0.003609, -0.0000018607]
 steering_to_angle_right_k = [6.876317, -0.006896, 0.0000016103]
-throttle_to_speed_k = [-30.2286483, 0.031891142, -0.000008005022786]    # For gear 0.
+throttle_to_speed_k_0 = [-30.2286483, 0.031891142, -0.000008005022786]  # Gear 0.
+throttle_to_speed_k_1 = [-30.2286483, 0.031891142, -0.000008005022786]  # Gear 1.
 
-# TODO: go from inputs to velocity/wheel angle (for simulation).
-# TODO: handle different gears.
+# TODO: add coefficients for gear 1.
 
 
 def wheel_angle_to_steering_input(wheel_angle):
@@ -52,7 +53,7 @@ def steering_input_to_wheel_angle(steering_input):
     return wheel_angle
 
 
-def throttle_input_to_linear_velocity(throttle_input):
+def throttle_input_to_linear_velocity(throttle_input, gear=0):
     """Returns the linear velocity corresponding to the input signal.
     Used by simulated vehicle. """
     if throttle_input <= 1500:
@@ -63,7 +64,12 @@ def throttle_input_to_linear_velocity(throttle_input):
 
     linear_velocity = 0
 
-    for i, k in enumerate(throttle_to_speed_k):
+    if gear == 0:
+        coefficients = throttle_to_speed_k_0
+    else:
+        coefficients = throttle_to_speed_k_1
+
+    for i, k in enumerate(coefficients):
         linear_velocity += k*throttle_input**i
 
     if linear_velocity < 0:
@@ -72,12 +78,17 @@ def throttle_input_to_linear_velocity(throttle_input):
     return linear_velocity
 
 
-def linear_velocity_to_throttle_input(linear_velocity):
+def linear_velocity_to_throttle_input(linear_velocity, gear=0):
     """Returns the throttle input corresponding to the linear velocity.
     Used by controller. """
     throttle_input = 0
 
-    for i, k in enumerate(speed_to_throttle_k):
+    if gear == 0:
+        coefficients = throttle_to_speed_k_0
+    else:
+        coefficients = throttle_to_speed_k_1
+
+    for i, k in enumerate(coefficients):
         throttle_input += k*linear_velocity**i
 
     return throttle_input
