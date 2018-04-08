@@ -144,11 +144,11 @@ class Trx(object):
 
         if x is None:
             x = [0., 0., 0., 0.]
-        self.x = x              # Vehicle state.
+        self.x = x[:]              # Vehicle state.
 
         if u is None:
             u = [0., 0.]
-        self.u = u              # Vehicle input.
+        self.u = u[:]              # Vehicle input.
 
         self.ID = ID
 
@@ -176,19 +176,19 @@ class Trx(object):
 
     def get_x(self):
         """Returns the current state. """
-        return self.x
+        return self.x[:]
 
     def set_x(self, x):
         """Sets the state. """
-        self.x = x
+        self.x = x[:]
 
     def get_u(self):
         """Returns the current input. """
-        return self.u
+        return self.u[:]
 
     def set_u(self, u):
         """Sets the input. """
-        self.u = u
+        self.u = u[:]
 
     def get_vel(self):
         """Returns the velocity. """
