@@ -51,9 +51,10 @@ class MPC(object):
             umax = self.inf*numpy.ones(self.nu)  # No max input limit.
 
         if x0 is None:
-            self.x0 = numpy.zeros(self.nx)  # Origin default initial condition.
+            x0 = numpy.zeros(self.nx)  # Origin default initial condition.
         else:
-            self.x0 = x0
+            x0 = x0
+        self.x0 = x0
 
         # Problem.
         self.prob = cvxpy.Problem(cvxpy.Minimize(1))
@@ -62,7 +63,7 @@ class MPC(object):
         state_constraint_lower = self._get_lower_state_constraints(xmin)
         state_constraint_upper = self._get_upper_state_constraints(xmax)
         input_constraint_lower, input_constraint_upper = self._get_input_constraints(umin, umax)
-        x0_constraints = self._get_x0_constraint(self.x0)       # Update during mpc.
+        x0_constraints = self._get_x0_constraint(x0)       # Update during mpc.
         dynamics_constraints = self._get_dynamics_constraints(Ad, Bd)
         slack_constraint_v, slack_constraint_safety = self._get_slack_constraints()
 
@@ -164,17 +165,13 @@ class MPC(object):
         current state. If the vehicle is a follower it also computes the state reference from the
         timegap. Updates the constraints and cost and solves the problem. """
         self.x0 = x0
-        xref, uref = self._get_x_u_references(self.x0[1], vopt)
+        xref, uref = self._get_x_u_references(x0[1], vopt)
 
         if not (self.is_leader or
                 current_time is None or
                 preceding_timestamps is None or
                 preceding_velocities is None or
                 preceding_positions is None):
-
-            # current_time = 0
-            # preceding_timestamps = self.dt * numpy.arange(len(preceding_timestamps)) - \
-            #     self.dt * len(preceding_timestamps)
 
             xgapref = self._get_xgap_ref(current_time, preceding_timestamps, preceding_velocities,
                                          preceding_positions)
@@ -185,7 +182,7 @@ class MPC(object):
         else:
             cost = self._get_mpc_cost(xref, uref)
 
-        self._update_x0_constraint(self.x0)
+        self._update_x0_constraint(x0)
 
         self.prob.objective = cvxpy.Minimize(cost)
 
@@ -252,16 +249,17 @@ class MPC(object):
         cost = state_reference_cost + input_reference_cost + self.v_slack_cost
 
         if not self.is_leader and xgapref is not None:
-            timegap_q = self.timegap_Q_diag.dot(xgapref)
+            timegap_cost = 0.5*cvxpy.quad_form(self.x, self.timegap_P) + \
+                           self.timegap_Q_diag.dot(xgapref) * self.x
 
-            cost = cost + self.safety_slack_cost + \
-                   0.5*cvxpy.quad_form(self.x, self.timegap_P) + timegap_q*self.x
+            cost = cost + self.safety_slack_cost + timegap_cost
 
         return cost
 
     def _get_xgap_ref(self, current_time, timestamps, velocities, positions):
         """Returns the reference state for tracking the timegap of the preceding vehicle. """
         target_time = current_time - self.timegap + numpy.arange(self.h + 1)*self.dt
+
         gap_vel = numpy.interp(target_time, timestamps, velocities)
         gap_pos = numpy.interp(target_time, timestamps, positions)
 
