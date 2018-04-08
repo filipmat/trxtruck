@@ -12,44 +12,33 @@ import math
 
 import trxmodel
 
-from trxtruck.msg import MocapState, PWM
+from trucksim.msg import MocapState, PWM
 from geometry_msgs.msg import Twist
 
 
 class SimTrx(object):
 
-    def __init__(self, vehicle_id,
-                 mocap_topic_name, mocap_topic_type, control_topic_name, control_topic_type,
+    def __init__(self, vehicle_id, mocap_topic_name, control_topic_name,
                  x=None, u=None, frequency=20):
 
-        # Node and topic names and types.
-        if u is None:
-            u = [0, 0, 1]
-        if x is None:
-            x = [0, 0, 0]
+        self.trx = trxmodel.Trx(x=x[:], u=u[:], ID=vehicle_id)  # Vehicle model.
 
-        self.x = x  # Vehicle state [x, y, yaw].
-        self.u = u  # Vehicle input [speed, angular velocity].
-
-        self.v = 0
         self.yaw_rate = 0
         self.acceleration = 0
         self.radius = 0
 
         self.dt = 1. / frequency  # Update interval.
 
-        self.last_x = self.x[:]  # Store the last state.
-
         self.vehicle_id = vehicle_id
 
         # Initialize ROS node.
-        rospy.init_node(self.vehicle_id + '_simulated', anonymous=False)
+        rospy.init_node(vehicle_id + '_simulated', anonymous=False)
 
         # Subscriber for receiving speed control signal.
-        rospy.Subscriber(control_topic_name, control_topic_type, self._callback)
+        rospy.Subscriber(control_topic_name, Twist, self._callback)
 
         # Publisher for publishing vehicle position and velocity.
-        self.pub = rospy.Publisher(mocap_topic_name, mocap_topic_type, queue_size=10)
+        self.pub = rospy.Publisher(mocap_topic_name, MocapState, queue_size=10)
 
         # ROS update rate.
         self.update_rate = rospy.Rate(frequency)
@@ -61,6 +50,7 @@ class SimTrx(object):
         self._initialize_standstill()
 
     def _initialize_standstill(self):
+        """Publish PWM commands when starting so that the vehicle is standing still. """
         for i in range(5):
             self.update_rate.sleep()
             self.pwm_start_pub.publish(self.vehicle_id, 1500, 1500, 120)
@@ -69,8 +59,8 @@ class SimTrx(object):
 
     def _callback(self, data):
         """Method called when subscriber receives data. Updates the input. """
-        self.u[0] = trxmodel.throttle_input_to_linear_velocity(data.linear.x)
-        self.u[1] = trxmodel.steering_input_to_angular_velocity(data.angular.z, self.v)
+        self.trx.set_throttle(data.linear.x)
+        self.trx.set_steering(data.angular.z)
 
     def run(self):
         """Run the simulation. Moves the vehicle and publishes the position. """
@@ -82,44 +72,51 @@ class SimTrx(object):
             self.update_rate.sleep()
 
     def _publish_vehicle_state(self):
+        """Publishes the current vehicle state. """
         t = rospy.get_time()
-        self.pub.publish(t, self.vehicle_id, self.x[0], self.x[1], self.x[2],
-                         self.yaw_rate, self.v, self.acceleration, self.radius)
+        x = self.trx.get_x()
+        self.pub.publish(t, self.vehicle_id, x[0], x[1], x[2], self.yaw_rate, x[3],
+                         self.acceleration, self.radius)
 
     def _move(self):
         """Moves the vehicle as a unicycle and calculates velocity, yaw rate, etc. """
 
-        self.last_x = self.x[:]     # Save information for velocity calculation.
+        last_x = self.trx.get_x()   # Save information for velocity calculation.
 
-        # Move the vehicle according to the dynamics.
-        self.x[0] = self.x[0] + self.dt * self.u[0] * math.cos(self.x[2])
-        self.x[1] = self.x[1] + self.dt * self.u[0] * math.sin(self.x[2])
-        self.x[2] = (self.x[2] + self.dt * self.u[1]) % (2 * math.pi)
+        self.trx.update(self.dt)    # Move vehicle.
+
+        x = self.trx.get_x()
 
         # Calculate yaw rate.
-        if self.x[2] < self.last_x[2] - math.pi:
-            yaw_difference = self.x[2] - self.last_x[2] + 2 * math.pi
-        elif self.x[2] > self.last_x[2] + math.pi:
-            yaw_difference = self.x[2] - self.last_x[2] - 2 * math.pi
+        if x[2] < last_x[2] - math.pi:
+            yaw_difference = x[2] - last_x[2] + 2 * math.pi
+        elif x[2] > last_x[2] + math.pi:
+            yaw_difference = x[2] - last_x[2] - 2 * math.pi
         else:
-            yaw_difference = self.x[2] - self.last_x[2]
+            yaw_difference = x[2] - last_x[2]
         self.yaw_rate = yaw_difference / self.dt
 
-        # Calculate velocity and acceleration.
-        distance = math.sqrt((self.x[0] - self.last_x[0]) ** 2 + (self.x[1] - self.last_x[1]) ** 2)
-        v = distance / self.dt
-        self.acceleration = (v - self.v) / self.dt
-        self.v = v
+        # Calculate acceleration.
+        self.acceleration = (x[3] - last_x[3]) / self.dt
 
         # Calculate turning radius.
+        distance = math.sqrt((x[0] - last_x[0]) ** 2 + (x[1] - last_x[1]) ** 2)
         try:
             self.radius = distance / yaw_difference
         except ZeroDivisionError:
             self.radius = 0
 
     def __str__(self):
-        """Returns the name of the node as well as the vehicle position. """
-        return self.vehicle_id + ': ' + super(SimTrx, self).__str__()
+        """Returns a string with the vehicle id and the current state. """
+        s = 'ID = {}: x = ['.format(self.vehicle_id)
+
+        for x in self.trx.get_x():
+            s += '{:.3f}, '.format(x)
+
+        s = s[:-2]
+        s += ']'
+
+        return s
 
 
 def main(args):
@@ -133,15 +130,14 @@ def main(args):
     vehicle_id = args[1]
     frequency = 20
     mocap_topic_name = 'mocap_state'
-    mocap_topic_type = MocapState
     control_topic_name = vehicle_id + '/cmd_vel'
-    control_topic_type = Twist
 
-    vn = SimTrx(vehicle_id,
-                mocap_topic_name, mocap_topic_type, control_topic_name, control_topic_type,
-                [0, 0, math.pi], [0., 0., 1], frequency)
+    x = [0, 0, math.pi, 0]
+    u = [0., 0.]
 
-    vn.run()
+    simtrx = SimTrx(vehicle_id, mocap_topic_name, control_topic_name, x=x, u=u, frequency=frequency)
+
+    simtrx.run()
 
 
 if __name__ == '__main__':
