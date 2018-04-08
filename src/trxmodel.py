@@ -84,9 +84,9 @@ def linear_velocity_to_throttle_input(linear_velocity, gear=0):
     throttle_input = 0
 
     if gear == 0:
-        coefficients = throttle_to_speed_k_0
+        coefficients = speed_to_throttle_k_0
     else:
-        coefficients = throttle_to_speed_k_1
+        coefficients = speed_to_throttle_k_1
 
     for i, k in enumerate(coefficients):
         throttle_input += k*linear_velocity**i
