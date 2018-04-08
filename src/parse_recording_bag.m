@@ -8,9 +8,6 @@ n = length(topics);
 cell_array = cell(n, 1);
 
 for i = 1:n
-    x = zeros(n, 1);
-    y = zeros(n, 1);
-    
     vehicle_struct = struct;
     
     sub_bag = select(bag, 'Topic', topics{i});
