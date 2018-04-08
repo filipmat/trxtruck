@@ -28,6 +28,9 @@ class DistributedMPC(object):
                  safety_distance, timegap, k_p, k_i, k_d, simulation_length, xmin=None, xmax=None,
                  umin=None, umax=None, vopt=None):
 
+        self.pwm_min = 1500
+        self.pwm_max = 1990
+
         self.dt = delta_t
         self.iterations = int(simulation_length/self.dt)
 
@@ -107,7 +110,7 @@ class DistributedMPC(object):
 
             if self.k % int(5./self.dt) == 0:
                 print('Iteration {}/{}'.format(self.k, self.iterations))
-                
+
             self.k += 1
 
         elapsed_time = time.time() - start_time
@@ -116,8 +119,9 @@ class DistributedMPC(object):
         print('Simulation completed. ')
         print('Elapsed time {:.2f}, average iteration time {:.3f}'.format(
             elapsed_time, average_time))
-        print(numpy.mean(self.path_errors))
-        print(numpy.mean(self.velocity_errors))
+        print('Mean square path error = {:.5f}'.format(numpy.mean(numpy.square(self.path_errors))))
+        print('Mean square vel error = {:.5f}'.format(
+            numpy.mean(numpy.square(self.velocity_errors))))
 
     def _control(self):
         """Performs one control iteration. """
@@ -212,6 +216,11 @@ class DistributedMPC(object):
                        self.vehicles[vehicle_index].get_vel())
         speed_pwm = self.speed_pwms[vehicle_index] + pwm_diff
 
+        if speed_pwm > self.pwm_max:
+            speed_pwm = self.pwm_max
+        if speed_pwm < self.pwm_min:
+            speed_pwm = self.pwm_min
+
         return speed_pwm
 
     def _order_follower_path_positions(self):
@@ -239,8 +248,8 @@ class DistributedMPC(object):
         ax.set_xlabel('s')
         ax.set_ylabel('gap')
         for i in range(len(self.vehicles)):
-            pyplot.plot(self.timestamps, self.timegaps[i], label=self.vehicles[i].ID)
-        pyplot.plot(self.timestamps, numpy.ones(len(self.timestamps))*self.timegap,
+            pyplot.plot(self.timestamps[i], self.timegaps[i], label=self.vehicles[i].ID)
+        pyplot.plot(self.timestamps[i], numpy.ones(len(self.timestamps[i]))*self.timegap,
                     label='reference')
         pyplot.legend(loc='upper right')
 
@@ -257,20 +266,28 @@ class DistributedMPC(object):
         ax = pyplot.subplot(233)
         ax.set_title('Speed time')
         for i in range(len(self.vehicles)):
-            pyplot.plot(self.timestamps, self.velocities[i], label=self.vehicles[i].ID)
+            pyplot.plot(self.timestamps[i], self.velocities[i], label=self.vehicles[i].ID)
         pyplot.legend(loc='upper right')
 
         ax = pyplot.subplot(234)
         ax.set_title('Path')
         for i in range(len(self.vehicles)):
-            pyplot.plot(self.timestamps, self.positions[i], label=self.vehicles[i].ID)
+            pyplot.plot(self.timestamps[i], self.positions[i], label=self.vehicles[i].ID)
         # pyplot.plot(x, y, label='Reference')
         pyplot.legend(loc='upper right')
 
         ax = pyplot.subplot(235)
         ax.set_title('Acc')
         for i in range(len(self.vehicles)):
-            pyplot.plot(self.timestamps, self.accelerations[i], label=self.vehicles[i].ID)
+            pyplot.plot(self.timestamps[i], self.accelerations[i], label=self.vehicles[i].ID)
+        pyplot.legend(loc='upper right')
+
+        ax = pyplot.subplot(236)
+        ax.set_title('Gap')
+        for i in range(len(self.vehicles)):
+            if i > 0:
+                pyplot.plot(self.timestamps[i], self.positions[i - 1] - self.positions[i],
+                            label=self.vehicles[i].ID)
         pyplot.legend(loc='upper right')
 
         pyplot.tight_layout(pad=0.5, w_pad=0.5, h_pad=2)
@@ -364,14 +381,14 @@ def main(args):
     delta_t = 0.1
     Ad = numpy.matrix([[1., 0.], [delta_t, 1.]])
     Bd = numpy.matrix([[delta_t], [0.]])
-    zeta = 0.25
+    zeta = 0.8
     Q_v = 1  # Part of Q matrix for velocity tracking.
     Q_s = 1  # Part of Q matrix for position tracking.
     Q = numpy.array([Q_v, 0, 0, Q_s]).reshape(2, 2)  # State tracking.
     R_acc = 0.1
     R = numpy.array([1]) * R_acc  # Input tracking.
     velocity_min = 0.
-    velocity_max = 2.
+    velocity_max = 1.5
     position_min = -100000.
     position_max = 1000000.
     acceleration_min = -0.5
@@ -380,7 +397,7 @@ def main(args):
     safety_distance = 0.2
     timegap = 1.
 
-    simulation_length = 10  # How many seconds to simulate.
+    simulation_length = 60  # How many seconds to simulate.
 
     xmin = numpy.array([velocity_min, position_min])
     xmax = numpy.array([velocity_max, position_max])
@@ -403,16 +420,27 @@ def main(args):
     center = [0.2, -y_radius / 2]
     pts = 400
 
-    save_data = True
+    save_data = False
     filename = 'sim_dmpc' + '_' + '_'.join(vehicle_ids) + '_'
 
     pt = path.Path()
     pt.gen_circle_path([x_radius, y_radius], points=pts, center=center)
 
+    start_distance = 0.5
+    path_len = pt.get_path_length()
+
     vehicles = []
-    for vehicle_id in vehicle_ids:
-        x = [center[0], center[1] + y_radius, math.pi, 0]
-        # x = [0, 0, math.pi, 0]
+    for i, vehicle_id in enumerate(vehicle_ids):
+
+        theta = (len(vehicle_ids) - i - 1)*2*math.pi*start_distance/path_len + 0.1
+
+        xcoord = center[0] + x_radius*math.cos(theta)
+        ycoord = center[1] + y_radius*math.sin(theta)
+
+        x = [xcoord, ycoord, theta + math.pi/2, 0]
+
+        # x = [center[0], center[1] + y_radius, math.pi, 0]
+        # # x = [0, 0, math.pi, 0]
         vehicles.append(trxmodel.Trx(x=x, ID=vehicle_id))
 
     mpc = DistributedMPC(vehicles, pt, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
@@ -424,7 +452,7 @@ def main(args):
     if save_data:
         mpc.save_data_as_rosbag(filename)
 
-    # mpc.plot_stuff()
+    mpc.plot_stuff()
 
 
 if __name__ == '__main__':
