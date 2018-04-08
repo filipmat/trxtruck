@@ -94,6 +94,7 @@ class Controller(object):
 
         self.print_interval_samples = int(print_interval/self.dt)
         self.k = 0  # Counter for printing in intervals.
+        self.control_iteration_time_sum = 0
 
         # Publisher for controlling vehicle.
         self.pwm_publisher = rospy.Publisher(control_topic_name, PWM, queue_size=1)
@@ -198,58 +199,67 @@ class Controller(object):
 
         # Solve MPC problem when not in starting phase.
         if not self.starting_phase:
-
-            self._update_current_state()
-
-            self._solve_mpc()
-
-            self._update_assumed_state()
-
-            self.speed_pwm = self._get_throttle_input()
-
-            if self.speed_pwm > self.pwm_max:
-                self.speed_pwm = self.pwm_max
-            if self.speed_pwm < self.pwm_min:
-                self.speed_pwm = self.pwm_min
-
-            self.angle_pwm = self._get_steering_input()
-
-            self._publish_control_commands()
-
-            timegap = 0
-            if not self.is_leader:
-                try:
-                    timegap = (self.preceding_positions[-(self.h + 1)] -
-                               self.path_position.get_position()) / self.pose[3]
-                except ZeroDivisionError:
-                    timegap = 0
-
-            # Print stuff.
-            if self.k % self.print_interval_samples == 0 and self.verbose:
-                avg_time = (rospy.get_time() - self.last_print_time) / self.print_interval_samples
-                acc = self.mpc.get_instantaneous_acceleration()
-                opt_v = self.vopt.get_speed_at(self.path_position.get_position())
-
-                info = 'v = {:.2f} ({:.2f}), a = {:5.2f}, pwm = {:.1f}, avg_t = {:.3f}'.format(
-                    self.pose[3], opt_v, acc, self.speed_pwm, avg_time)
-                if not self.is_leader:
-                    info += ', t = {:.2f}'.format(timegap)
-
-                print(info)
-
-                self.last_print_time = rospy.get_time()
-
-            # Record stuff.
-            if self.recording:
-                pos = self.path_position.get_position()
-                
-                self._record_data(self.vehicle_id, rospy.get_time(), self.pose[0], self.pose[1],
-                                  self.pose[2], self.pose[3], pos, self.vopt.get_speed_at(pos),
-                                  timegap, self.mpc.get_instantaneous_acceleration(),
-                                  self.frenet.get_y_error(), self.angle_pwm, self.speed_pwm,
-                                  self.gear)
+            self._control()
 
         self.k += 1
+
+    def _control(self):
+        """Perform one control iteration, path tracking with frenet and velocity with MPC. """
+        start_time = rospy.get_time()  # Used for checking average iteration time.
+
+        self._update_current_state()
+
+        self._solve_mpc()
+
+        self._update_assumed_state()
+
+        self.speed_pwm = self._get_throttle_input()
+
+        if self.speed_pwm > self.pwm_max:
+            self.speed_pwm = self.pwm_max
+        if self.speed_pwm < self.pwm_min:
+            self.speed_pwm = self.pwm_min
+
+        self.angle_pwm = self._get_steering_input()
+
+        self._publish_control_commands()
+
+        timegap = 0
+        if not self.is_leader:
+            try:
+                timegap = (self.preceding_positions[-(self.h + 1)] -
+                           self.path_position.get_position()) / self.pose[3]
+            except ZeroDivisionError:
+                timegap = 0
+
+        # Print stuff.
+        if self.k % self.print_interval_samples == 0 and self.verbose:
+            avg_time = self.control_iteration_time_sum / self.print_interval_samples
+            acc = self.mpc.get_instantaneous_acceleration()
+            opt_v = self.vopt.get_speed_at(self.path_position.get_position())
+
+            info = 'v = {:.2f} ({:.2f}), a = {:5.2f}, pwm = {:.1f}, avg_t = {:.3f}'.format(
+                self.pose[3], opt_v, acc, self.speed_pwm, avg_time)
+            if not self.is_leader:
+                info += ', t = {:.2f}'.format(timegap)
+
+            print(info)
+
+            self.last_print_time = rospy.get_time()
+
+            self.control_iteration_time_sum = 0
+
+        # Record stuff.
+        if self.recording:
+            pos = self.path_position.get_position()
+
+            self._record_data(self.vehicle_id, rospy.get_time(), self.pose[0], self.pose[1],
+                              self.pose[2], self.pose[3], pos, self.vopt.get_speed_at(pos),
+                              timegap, self.mpc.get_instantaneous_acceleration(),
+                              self.frenet.get_y_error(), self.angle_pwm, self.speed_pwm,
+                              self.gear)
+
+        self.control_iteration_time_sum += rospy.get_time() - start_time
 
     def _update_current_state(self):
         """Shifts the old states and adds the current state. """
