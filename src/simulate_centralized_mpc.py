@@ -40,6 +40,9 @@ class CentralizedMPC(object):
             vopt = speed_profile.Speed([1], [1])
         self.vopt = vopt
 
+        self.pwm_max = 1990
+        self.pwm_min = 1500
+
         self.mpc = solver_centralized_mpc.MPC(len(vehicles), Ad, Bd, delta_t, horizon, zeta, Q, R,
                                               truck_length, safety_distance, timegap, xmin, xmax,
                                               umin, umax)
@@ -128,7 +131,7 @@ class CentralizedMPC(object):
 
             timegap = 0
             if i > 0 and vehicle.get_vel() != 0:
-                timegap = (self.path_positions[i - 1].get_position() - pos) / x[3]
+                timegap = (self.path_positions[i - 1].get_position() - pos) / vehicle.get_vel()
 
             self.xx[i, self.k] = x[0]
             self.yy[i, self.k] = x[1]
@@ -177,6 +180,11 @@ class CentralizedMPC(object):
                    trxmodel.linear_velocity_to_throttle_input(
                        self.vehicles[vehicle_index].get_vel())
         speed_pwm = self.speed_pwms[vehicle_index] + pwm_diff
+
+        if speed_pwm > self.pwm_max:
+            speed_pwm = self.pwm_max
+        if speed_pwm < self.pwm_min:
+            speed_pwm = self.pwm_min
 
         return speed_pwm
 
@@ -323,7 +331,7 @@ def main(args):
     safety_distance = 0.2
     timegap = 1.
 
-    simulation_length = 100  # How many seconds to simulate.
+    simulation_length = 120  # How many seconds to simulate.
 
     xmin = numpy.array([velocity_min, position_min])
     xmax = numpy.array([velocity_max, position_max])
@@ -345,7 +353,7 @@ def main(args):
     center = [0.2, -y_radius / 2]
     pts = 400
 
-    save_data = True
+    save_data = False
     filename = 'sim_cmpc' + '_' + '_'.join(vehicle_ids) + '_'
 
     pt = path.Path()
