@@ -45,6 +45,9 @@ class CentralizedMPC(object):
         self.starting_phase = True
         self.starting_phase_start_time = 0
 
+        self.pwm_max = 1900
+        self.pwm_min = 1500
+
         # Variables for printing information in terminal.
         self.verbose = True
         self.k = 0
@@ -151,6 +154,11 @@ class CentralizedMPC(object):
 
             v = self._get_vel(vehicle_id, accelerations[i])
             self.speed_pwms[vehicle_id] = self._get_throttle_input(vehicle_id, v)
+
+            if self.speed_pwms[vehicle_id] > self.pwm_max:
+                self.speed_pwms[vehicle_id] = self.pwm_max
+            if self.speed_pwms[vehicle_id] < self.pwm_min:
+                self.speed_pwms[vehicle_id] = self.pwm_min
 
             # Get angular velocity from Frenet controller and steering input from vehicle model.
             omega = self._get_omega(vehicle_id, accelerations[i])
