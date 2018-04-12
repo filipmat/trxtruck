@@ -5,10 +5,8 @@ Centralized MPC controller.
 """
 
 import rospy
-import rosbag
 import sys
 import numpy
-import os
 
 import speed_profile
 import path
@@ -18,7 +16,7 @@ import trxmodel
 import helper
 
 from trxtruck.msg import MocapState, PWM, ControllerRun, Recording
-from trxtruck.srv import SetMeasurement
+from trxtruck.srv import SetMeasurement, Command
 
 
 class CentralizedMPC(object):
@@ -26,7 +24,7 @@ class CentralizedMPC(object):
     def __init__(self, position_topic_name, control_topic_name, vehicle_ids,
                  vehicle_path, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
                  safety_distance, timegap, k_p, k_i, k_d,
-                 xmin=None, xmax=None, umin=None, umax=None, vopt=None,
+                 xmin=None, xmax=None, umin=None, umax=None, speed_ref=None,
                  recording_service_name='cmpc/set_measurement', recording_filename='cmpc'):
 
         rospy.init_node('centralized_mpc', anonymous=True)
@@ -59,9 +57,10 @@ class CentralizedMPC(object):
         self.rate = rospy.Rate(1./self.dt)
 
         # Optimal speed profile in space. If none given, optimal speed is 1 m/s everywhere.
-        if vopt is None:
-            vopt = speed_profile.Speed([1], [1])
-        self.vopt = vopt
+        if speed_ref is None:
+            speed_ref = speed_profile.Speed([1], [1])
+        self.speed_profile = speed_ref
+        self.original_speed_profile = speed_ref
 
         # Centralized MPC solver.
         self.mpc = solver_centralized_mpc.MPC(len(self.vehicle_ids), Ad, Bd, self.dt, horizon, zeta,
@@ -97,6 +96,9 @@ class CentralizedMPC(object):
 
         # Service for starting or stopping recording.
         rospy.Service(recording_service_name, SetMeasurement, self.set_measurement)
+
+        # Service for custom commands.
+        rospy.Service('cmpc/command', Command, self._command_callback)
 
         print('\nCentralized MPC initialized. Vehicles: {}.\n'.format(self.vehicle_ids))
 
@@ -142,7 +144,7 @@ class CentralizedMPC(object):
 
         x0s = self._get_x0s()  # Get initial conditions.
 
-        self.mpc.solve_mpc(self.vopt, x0s)  # Solve MPC problem.
+        self.mpc.solve_mpc(self.speed_profile, x0s)  # Solve MPC problem.
 
         accelerations = self.mpc.get_instantaneous_accelerations()  # Get accelerations.
 
@@ -177,7 +179,7 @@ class CentralizedMPC(object):
 
             if self.recording:
                 self._record_data(vehicle_id, rospy.get_time(), x[0], x[1], x[2], x[3], pos,
-                                  self.vopt.get_speed_at(pos), timegap, accelerations[i],
+                                  self.speed_profile.get_speed_at(pos), timegap, accelerations[i],
                                   self.frenets[vehicle_id].get_y_error(),
                                   self.speed_pwms[vehicle_id], self.angle_pwms[vehicle_id],
                                   self.gears[vehicle_id])
@@ -186,7 +188,7 @@ class CentralizedMPC(object):
             if print_info:
                 info += '\n{}: v = {:.2f} ({:.2f}), a = {:5.2f}'.format(
                     vehicle_id, self.poses[vehicle_id][3],
-                    self.vopt.get_speed_at(pos),
+                    self.speed_profile.get_speed_at(pos),
                     accelerations[i])
 
                 if i > 0:
@@ -379,6 +381,25 @@ class CentralizedMPC(object):
         except NameError as e:
             print('Error when stopping recording: {}'.format(e))
 
+    def _command_callback(self, req):
+        """Callback for service for custom commands. """
+
+        if req.cmd == 1:
+            self._brake()
+
+        if req.cmd == 2:
+            self._unbrake()
+
+        return 1
+
+    def _brake(self):
+        """Brakes the vehicle specified by the index. """
+        self.speed_profile = speed_profile.Speed([1], [0])
+
+    def _unbrake(self):
+        """Undoes the braking. """
+        self.speed_profile = self.original_speed_profile
+
 
 def main(args):
 
@@ -452,7 +473,7 @@ def main(args):
     mpc = CentralizedMPC(position_topic_name, control_topic_name, vehicle_ids,
                          pt, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
                          safety_distance, timegap, k_p, k_i, k_d, xmin=xmin, xmax=xmax, umin=umin,
-                         umax=umax, vopt=vopt, recording_service_name=recording_service_name,
+                         umax=umax, speed_ref=vopt, recording_service_name=recording_service_name,
                          recording_filename=recording_filename)
 
     mpc.run()
