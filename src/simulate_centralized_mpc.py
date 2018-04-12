@@ -26,7 +26,7 @@ class CentralizedMPC(object):
 
     def __init__(self, vehicles, vehicle_path, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
                  safety_distance, timegap, k_p, k_i, k_d, simulation_length, xmin=None, xmax=None,
-                 umin=None, umax=None, vopt=None):
+                 umin=None, umax=None, speed_ref=None):
 
         self.dt = delta_t
         self.iterations = int(simulation_length/self.dt)
@@ -36,9 +36,10 @@ class CentralizedMPC(object):
         self.timegap = timegap
 
         # Optimal speed profile in space. If none given, optimal speed is 1 m/s everywhere.
-        if vopt is None:
-            vopt = speed_profile.Speed([1], [1])
-        self.vopt = vopt
+        if speed_ref is None:
+            speed_ref = speed_profile.Speed([1], [1])
+        self.speed_profile = speed_ref
+        self.original_speed_profile = speed_ref
 
         self.pwm_max = 1990
         self.pwm_min = 1500
@@ -94,6 +95,9 @@ class CentralizedMPC(object):
                 print('Iteration {}/{}'.format(self.k, self.iterations))
             self.k += 1
 
+            if self.k == 300:
+                self._brake()
+
         elapsed_time = time.time() - start_time
         average_time = elapsed_time / self.iterations
 
@@ -106,7 +110,7 @@ class CentralizedMPC(object):
     def _control(self):
         """Performs one control iteration. """
         x0s = self._get_x0s()  # Get initial conditions.
-        self.mpc.solve_mpc(self.vopt, x0s)  # Solve MPC problem.
+        self.mpc.solve_mpc(self.speed_profile, x0s)  # Solve MPC problem.
         accelerations = self.mpc.get_instantaneous_accelerations()  # Get accelerations.
 
         # For each vehicle translate acceleration into speed control input. Get steering control
@@ -138,11 +142,11 @@ class CentralizedMPC(object):
             self.yaws[i, self.k] = x[2]
             self.positions[i, self.k] = pos
             self.velocities[i, self.k] = x[3]
-            self.velocity_references[i, self.k] = self.vopt.get_speed_at(pos)
+            self.velocity_references[i, self.k] = self.speed_profile.get_speed_at(pos)
             self.accelerations[i, self.k] = accelerations[i]
             self.timegaps[i, self.k] = timegap
             self.path_errors[i, self.k] = self.frenets[i].get_y_error()
-            self.velocity_errors[i, self.k] = self.vopt.get_speed_at(pos) - x[3]
+            self.velocity_errors[i, self.k] = self.speed_profile.get_speed_at(pos) - x[3]
             self.speed_inputs[i, self.k] = self.speed_pwms[i]
             self.steering_inputs[i, self.k] = self.angle_pwms[i]
 
@@ -201,6 +205,14 @@ class CentralizedMPC(object):
 
                     self.path_positions[i].set_position_behind(preceding_position)
 
+    def _brake(self):
+        """Brakes all vehicles. """
+        self.speed_profile = speed_profile.Speed([1], [0])
+
+    def unbrake(self):
+        """Undoes the braking. """
+        self.speed_profile = self.original_speed_profile
+
     def plot_stuff(self):
         x = [item[0] for item in self.pt.path]
         y = [item[1] for item in self.pt.path]
@@ -222,10 +234,11 @@ class CentralizedMPC(object):
         ax.set_title('Speed space')
         for i in range(len(self.vehicles)):
             pyplot.plot(self.positions[i], self.velocities[i], label=self.vehicles[i].ID)
-        voptend = numpy.argmax(self.vopt.pos > numpy.max(self.positions))
+        voptend = numpy.argmax(self.speed_profile.pos > numpy.max(self.positions))
         if voptend == 0:
-            voptend = len(self.vopt.pos)
-        pyplot.plot(self.vopt.pos[:voptend], self.vopt.vel[:voptend], label='reference')
+            voptend = len(self.speed_profile.pos)
+        pyplot.plot(self.speed_profile.pos[:voptend], self.speed_profile.vel[:voptend],
+                    label='reference')
         pyplot.legend(loc='upper right')
 
         ax = pyplot.subplot(323)
@@ -239,6 +252,12 @@ class CentralizedMPC(object):
         for i in range(len(self.vehicles)):
             pyplot.plot(self.xx[i], self.yy[i], label=self.vehicles[i].ID)
         pyplot.plot(x, y, label='Reference')
+        pyplot.legend(loc='upper right')
+
+        ax = pyplot.subplot(325)
+        ax.set_title('Acceleration')
+        for i in range(len(self.vehicles)):
+            pyplot.plot(self.timestamps[i], self.accelerations[i], label = self.vehicles[i].ID)
         pyplot.legend(loc='upper right')
 
         pyplot.tight_layout(pad=0.5, w_pad=0.5, h_pad=2)
@@ -331,7 +350,7 @@ def main(args):
     safety_distance = 0.2
     timegap = 1.
 
-    simulation_length = 120  # How many seconds to simulate.
+    simulation_length = 60  # How many seconds to simulate.
 
     xmin = numpy.array([velocity_min, position_min])
     xmax = numpy.array([velocity_max, position_max])
@@ -343,9 +362,9 @@ def main(args):
     opt_v_max = 1.2
     opt_v_min = 0.8
     opt_v_period_length = 60  # Period in meters.
-    vopt = speed_profile.Speed()
-    vopt.generate_sin(opt_v_min, opt_v_max, opt_v_period_length, opt_v_pts)
-    vopt.repeating = True
+    speed_ref = speed_profile.Speed()
+    speed_ref.generate_sin(opt_v_min, opt_v_max, opt_v_period_length, opt_v_pts)
+    speed_ref.repeating = True
 
     # Controller reference path.
     x_radius = 1.4
@@ -366,7 +385,7 @@ def main(args):
 
     mpc = CentralizedMPC(vehicles, pt, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
                          safety_distance, timegap, k_p, k_i, k_d, simulation_length,
-                         xmin=xmin, xmax=xmax, umin=umin,umax=umax, vopt=vopt)
+                         xmin=xmin, xmax=xmax, umin=umin, umax=umax, speed_ref=speed_ref)
 
     mpc.run()
 
