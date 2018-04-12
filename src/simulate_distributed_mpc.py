@@ -26,7 +26,7 @@ class DistributedMPC(object):
 
     def __init__(self, vehicles, vehicle_path, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
                  safety_distance, timegap, k_p, k_i, k_d, simulation_length, xmin=None, xmax=None,
-                 umin=None, umax=None, vopt=None):
+                 umin=None, umax=None, speed_ref=None):
 
         self.pwm_min = 1500
         self.pwm_max = 1990
@@ -39,9 +39,9 @@ class DistributedMPC(object):
         self.timegap = timegap
 
         # Optimal speed profile in space. If none given, optimal speed is 1 m/s everywhere.
-        if vopt is None:
-            vopt = speed_profile.Speed([1], [1])
-        self.vopt = vopt
+        if speed_ref is None:
+            speed_ref = speed_profile.Speed([1], [1])
+        self.original_speed_profile = speed_ref
 
         self.vehicles = vehicles
         self.n = len(vehicles)
@@ -72,6 +72,7 @@ class DistributedMPC(object):
         self.mpcs = []
         self.speed_pwms = []        # Speed control signals.
         self.angle_pwms = []        # Wheel angle control signals.
+        self.speed_profiles = []
 
         # Initialize lists.
         for i, vehicle in enumerate(self.vehicles):
@@ -90,6 +91,8 @@ class DistributedMPC(object):
 
             self.speed_pwms.append(1500)
             self.angle_pwms.append(1500)
+
+            self.speed_profiles.append(speed_ref)
 
         self._order_follower_path_positions()
 
@@ -112,6 +115,9 @@ class DistributedMPC(object):
                 print('Iteration {}/{}'.format(self.k, self.iterations))
 
             self.k += 1
+
+            # if self.k == 300:
+            #     self._brake(0)
 
         elapsed_time = time.time() - start_time
         average_time = elapsed_time / self.iterations
@@ -147,9 +153,10 @@ class DistributedMPC(object):
 
             # Solve MPC.
             if i == 0:
-                self.mpcs[i].solve_mpc(self.vopt, x0)
+                self.mpcs[i].solve_mpc(self.speed_profiles[i], x0)
             else:
-                self.mpcs[i].solve_mpc(self.vopt, x0, self.assumed_timestamps[i, -(self.h + 1)],
+                self.mpcs[i].solve_mpc(self.speed_profiles[i], x0,
+                                       self.assumed_timestamps[i, -(self.h + 1)],
                                        self.assumed_timestamps[i - 1],
                                        self.assumed_velocities[i - 1],
                                        self.assumed_positions[i - 1])
@@ -187,11 +194,11 @@ class DistributedMPC(object):
             self.yaws[i, self.k] = x[2]
             self.positions[i, self.k] = pos
             self.velocities[i, self.k] = x[3]
-            self.velocity_references[i, self.k] = self.vopt.get_speed_at(pos)
+            self.velocity_references[i, self.k] = self.speed_profiles[i].get_speed_at(pos)
             self.accelerations[i, self.k] = acceleration
             self.timegaps[i, self.k] = timegap
             self.path_errors[i, self.k] = self.frenets[i].get_y_error()
-            self.velocity_errors[i, self.k] = self.vopt.get_speed_at(pos) - x[3]
+            self.velocity_errors[i, self.k] = self.speed_profiles[i].get_speed_at(pos) - x[3]
             self.speed_inputs[i, self.k] = self.speed_pwms[i]
             self.steering_inputs[i, self.k] = self.angle_pwms[i]
 
@@ -236,6 +243,14 @@ class DistributedMPC(object):
 
                     self.path_positions[i].set_position_behind(preceding_position)
 
+    def _brake(self, vehicle_index):
+        """Brakes the vehicle. """
+        self.speed_profiles[vehicle_index] = speed_profile.Speed([1], [0])
+
+    def _unbrake(self, vehicle_index):
+        """Undoes the braking of the vehicle. """
+        self.speed_profiles[vehicle_index] = speed_profile.Speed([1], [0])
+
     def plot_stuff(self):
         x = [item[0] for item in self.pt.path]
         y = [item[1] for item in self.pt.path]
@@ -257,10 +272,11 @@ class DistributedMPC(object):
         ax.set_title('Speed space')
         for i in range(len(self.vehicles)):
             pyplot.plot(self.positions[i], self.velocities[i], label=self.vehicles[i].ID)
-        voptend = numpy.argmax(self.vopt.pos > numpy.max(self.positions))
+        voptend = numpy.argmax(self.original_speed_profile.pos > numpy.max(self.positions))
         if voptend == 0:
-            voptend = len(self.vopt.pos)
-        pyplot.plot(self.vopt.pos[:voptend], self.vopt.vel[:voptend], label='reference')
+            voptend = len(self.original_speed_profile.pos)
+        pyplot.plot(self.original_speed_profile.pos[:voptend],
+                    self.original_speed_profile.vel[:voptend], label='reference')
         pyplot.legend(loc='upper right')
 
         ax = pyplot.subplot(233)
@@ -409,9 +425,9 @@ def main(args):
     opt_v_max = 1.2
     opt_v_min = 0.8
     opt_v_period_length = 60  # Period in meters.
-    vopt = speed_profile.Speed()
-    vopt.generate_sin(opt_v_min, opt_v_max, opt_v_period_length, opt_v_pts)
-    vopt.repeating = True
+    speed_ref = speed_profile.Speed()
+    speed_ref.generate_sin(opt_v_min, opt_v_max, opt_v_period_length, opt_v_pts)
+    speed_ref.repeating = True
     # vopt = speed_profile.Speed([1], [1])
 
     # Controller reference path.
@@ -445,7 +461,7 @@ def main(args):
 
     mpc = DistributedMPC(vehicles, pt, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
                          safety_distance, timegap, k_p, k_i, k_d, simulation_length,
-                         xmin=xmin, xmax=xmax, umin=umin, umax=umax, vopt=vopt)
+                         xmin=xmin, xmax=xmax, umin=umin, umax=umax, speed_ref=speed_ref)
 
     mpc.run()
 
