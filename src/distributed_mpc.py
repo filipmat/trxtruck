@@ -18,7 +18,7 @@ import trxmodel
 import helper
 
 from trxtruck.msg import MocapState, PWM, AssumedState, ControllerRun, Recording
-from trxtruck.srv import SetMeasurement
+from trxtruck.srv import SetMeasurement, Command
 
 # TODO: make printing and recording more structured in control().
 
@@ -28,7 +28,7 @@ class Controller(object):
     def __init__(self, position_topic_name, control_topic_name, vehicle_id, preceding_id,
                  is_leader, vehicle_path, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
                  safety_distance, timegap,
-                 xmin=None, xmax=None, umin=None, umax=None, x0=None, vopt=None,
+                 xmin=None, xmax=None, umin=None, umax=None, x0=None, speed_ref=None,
                  k_p=0., k_i=0., k_d=0., recording_service_name='dmpc/set_measurement',
                  recording_filename='dmpc'):
 
@@ -81,9 +81,10 @@ class Controller(object):
         self.last_print_time = rospy.get_time()
 
         # Optimal speed profile in space. If none given, optimal speed is 1 m/s everywhere.
-        if vopt is None:
-            vopt = speed_profile.Speed([1], [1])
-        self.vopt = vopt
+        if speed_ref is None:
+            speed_ref = speed_ref.Speed([1], [1])
+        self.speed_profile = speed_ref
+        self.original_speed_profile = speed_ref
 
         # Update interval.
         self.dt = delta_t
@@ -115,6 +116,9 @@ class Controller(object):
 
         # Service for starting or stopping recording.
         rospy.Service(recording_service_name, SetMeasurement, self._set_measurement)
+
+        # Service for custom commands.
+        rospy.Service(self.vehicle_id + '/command', Command, self._command_callback)
 
         # MPC controller for speed control.
         self.mpc = solver_distributed_mpc.MPC(Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
@@ -236,7 +240,7 @@ class Controller(object):
         if self.k % self.print_interval_samples == 0 and self.verbose:
             avg_time = self.control_iteration_time_sum / self.print_interval_samples
             acc = self.mpc.get_instantaneous_acceleration()
-            opt_v = self.vopt.get_speed_at(self.path_position.get_position())
+            opt_v = self.speed_profile.get_speed_at(self.path_position.get_position())
 
             info = 'v = {:.2f} ({:.2f}), a = {:5.2f}, pwm = {:.1f}, avg_t = {:.3f}'.format(
                 self.pose[3], opt_v, acc, self.speed_pwm, avg_time)
@@ -254,7 +258,7 @@ class Controller(object):
             pos = self.path_position.get_position()
 
             self._record_data(self.vehicle_id, rospy.get_time(), self.pose[0], self.pose[1],
-                              self.pose[2], self.pose[3], pos, self.vopt.get_speed_at(pos),
+                              self.pose[2], self.pose[3], pos, self.speed_profile.get_speed_at(pos),
                               timegap, self.mpc.get_instantaneous_acceleration(),
                               self.frenet.get_y_error(), self.angle_pwm, self.speed_pwm,
                               self.gear)
@@ -275,10 +279,10 @@ class Controller(object):
         """Solves the MPC problem given the current state, and state of preceding vehicle if not
         the leader. """
         if self.is_leader:
-            self.mpc.solve_mpc(self.vopt,
+            self.mpc.solve_mpc(self.speed_profile,
                                [self.velocities[-(self.h + 1)], self.positions[-(self.h + 1)]])
         else:
-            self.mpc.solve_mpc(self.vopt,
+            self.mpc.solve_mpc(self.speed_profile,
                                [self.velocities[-(self.h + 1)], self.positions[-(self.h + 1)]],
                                self.timestamps[-(self.h + 1)],
                                self.preceding_timestamps, self.preceding_velocities,
@@ -327,6 +331,14 @@ class Controller(object):
             self.stop()
 
         return 1
+
+    def _brake(self):
+        """Sets the speed profile to 0 m/s everywhere. """
+        self.speed_profile = speed_profile.Speed([1], [0])
+
+    def _unbrake(self):
+        """Undoes the braking. """
+        self.speed_profile = self.original_speed_profile
 
     def stop(self):
         """Stops/pauses the controller. """
@@ -423,6 +435,18 @@ class Controller(object):
         except NameError as e:
             print('Error when stopping recording: {}'.format(e))
 
+    def _command_callback(self, req):
+        """Callback for service for custom commands. """
+
+        # Brake if the commands is 1.
+        if req.cmd == 1:
+            self._brake()
+
+        if req.cmd == 2:
+            self._unbrake()
+
+        return 1
+
 
 def print_numpy(a):
     s = '['
@@ -515,7 +539,7 @@ def main(args):
     controller = Controller(
         position_topic_name, control_topic_name, vehicle_id, preceding_id, is_leader,
         pt, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length, safety_distance, timegap,
-        vopt=vopt, xmin=xmin, xmax=xmax, umin=umin, umax=umax, x0=x0,
+        speed_ref=vopt, xmin=xmin, xmax=xmax, umin=umin, umax=umax, x0=x0,
         k_p=k_p, k_i=k_i, k_d=k_d, recording_service_name=recording_service_name,
         recording_filename=recording_filename
     )
