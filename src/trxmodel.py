@@ -7,13 +7,6 @@ import math
 axle_length = 0.33                      # Length between wheel pairs.
 
 throttle_min = 1500
-# Prevent velocity from decreasing if going above this value because of 2nd degree polynomial.
-throttle_max = 1990
-
-angle_to_steering_left_k = [1459, -87.2, -1633]
-angle_to_steering_right_k = [1642, -145, 1274]
-speed_to_throttle_k_0 = [1576, 33.4, 137]   # Gear 0.
-speed_to_throttle_k_1 = [1576, 33.4, 137]   # Gear 1.
 
 steering_to_angle_left_k = [-1.25217, 0.003609, -0.0000018607]
 steering_to_angle_right_k = [6.876317, -0.006896, 0.0000016103]
@@ -23,17 +16,37 @@ throttle_to_speed_k_1 = [-30.2286483, 0.031891142, -0.000008005022786]  # Gear 1
 # TODO: add coefficients for gear 1.
 
 
+def _2nd_degree_inverse(k, value, reverse=False):
+    """Solves inverse of second degree problem with coefficients k.
+    reverse=True if for the original, non-inverse, problem an increasing input results in a
+    decreasing value. """
+    limit = k[0] - k[1]**2 / (4 * k[2])
+
+    # Sign of the second degree function.
+    sgn = sign(k[2])
+
+    # Make sure that the problem is solvable.
+    if sgn*value < sgn*limit:
+        value = limit + sgn*0.001
+
+    # If reversed, change which of the two solutions is returned.
+    if reverse:
+        sgn = - sgn
+
+    result = -k[1]/(2*k[2]) + sgn*math.sqrt((k[1]/(2*k[2]))**2 - (k[0] - value)/k[2])
+
+    return result
+
+
 def wheel_angle_to_steering_input(wheel_angle):
     """Returns the steering input corresponding to the wheel angle. """
-    steering_input = 0
-
     if wheel_angle > 0:
-        coefficients = angle_to_steering_left_k
+        k = steering_to_angle_left_k
     else:
-        coefficients = angle_to_steering_right_k
+        k = steering_to_angle_right_k
 
-    for i, k in enumerate(coefficients):
-        steering_input += k*wheel_angle**i
+    # reverse=True because for the steering and increasing input gives decreasing wheel angle.
+    steering_input = _2nd_degree_inverse(k, wheel_angle, reverse=True)
 
     return steering_input
 
@@ -59,17 +72,18 @@ def throttle_input_to_linear_velocity(throttle_input, gear=0):
     if throttle_input <= 1500:
         return 0
 
-    if throttle_input > throttle_max:
-        throttle_input = throttle_max
-
     linear_velocity = 0
 
     if gear == 0:
-        coefficients = throttle_to_speed_k_0
+        k = throttle_to_speed_k_0
     else:
-        coefficients = throttle_to_speed_k_1
+        k = throttle_to_speed_k_1
 
-    for i, k in enumerate(coefficients):
+    # Maximum throttle input is the input that maximizes the 2nd degree polynomial.
+    if throttle_input > -k[1]/(2*k[2]):
+        throttle_input = -k[1]/(2*k[2])
+
+    for i, k in enumerate(k):
         linear_velocity += k*throttle_input**i
 
     if linear_velocity < 0:
@@ -81,15 +95,15 @@ def throttle_input_to_linear_velocity(throttle_input, gear=0):
 def linear_velocity_to_throttle_input(linear_velocity, gear=0):
     """Returns the throttle input corresponding to the linear velocity.
     Used by controller. """
-    throttle_input = 0
+    if linear_velocity < 0:
+        return throttle_min
 
     if gear == 0:
-        coefficients = speed_to_throttle_k_0
+        k = throttle_to_speed_k_0
     else:
-        coefficients = speed_to_throttle_k_1
+        k = throttle_to_speed_k_1
 
-    for i, k in enumerate(coefficients):
-        throttle_input += k*linear_velocity**i
+    throttle_input = _2nd_degree_inverse(k, linear_velocity)
 
     return throttle_input
 
