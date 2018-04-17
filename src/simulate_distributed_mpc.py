@@ -381,12 +381,13 @@ class DistributedMPC(object):
 
 def main(args):
 
+    vehicle_amount = 1
     if len(args) > 1:
-        vehicle_ids = args[1:]
-        print(vehicle_ids)
-    else:
-        print('Need to enter at least one vehicle ID. ')
-        sys.exit()
+        vehicle_amount = int(args[1])
+
+    vehicle_ids = []
+    for i in range(vehicle_amount):
+        vehicle_ids.append('v{}'.format(i + 1))
 
     # PID parameters for path tracking.
     k_p = 0.5
@@ -413,7 +414,7 @@ def main(args):
     safety_distance = 0.2
     timegap = 1.
 
-    simulation_length = 60  # How many seconds to simulate.
+    simulation_length = 20  # How many seconds to simulate.
 
     xmin = numpy.array([velocity_min, position_min])
     xmax = numpy.array([velocity_max, position_max])
@@ -436,7 +437,7 @@ def main(args):
     center = [0.2, -y_radius / 2]
     pts = 400
 
-    save_data = False
+    save_data = True
     filename = 'sim_dmpc' + '_' + '_'.join(vehicle_ids) + '_'
 
     pt = path.Path()
