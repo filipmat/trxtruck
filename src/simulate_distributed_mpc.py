@@ -123,10 +123,14 @@ class DistributedMPC(object):
 
         elapsed_time = time.time() - start_time
         average_time = elapsed_time / self.iterations
-        average_mpc_time = self.mpctime / self.iterations
+        if len(self.vehicles) > 1:
+            average_mpc_time = (self.mpctime / self.iterations) / (len(self.vehicles) - 1)
+        else:
+            average_mpc_time = 0
         average_solver_iterations = 0
-        for mpc in self.mpcs:
-            average_solver_iterations += (mpc.solver_iterations / mpc.iterations) / len(self.mpcs)
+        for i in range(2, len(self.vehicles)):
+            average_solver_iterations += \
+                (self.mpcs[i].solver_iterations/self.mpcs[i].iterations) / (len(self.vehicles) - 1)
 
         print('Simulation completed. ')
         print('Elapsed time {:.2f}, average iteration time {:.3f}'.format(
@@ -160,16 +164,16 @@ class DistributedMPC(object):
             self.assumed_timestamps[i, -(self.h + 1)] = self.k*self.dt
 
             # Solve MPC.
-            tt = time.time()
             if i == 0:
                 self.mpcs[i].solve_mpc(self.speed_profiles[i], x0)
             else:
+                tt = time.time()
                 self.mpcs[i].solve_mpc(self.speed_profiles[i], x0,
                                        self.assumed_timestamps[i, -(self.h + 1)],
                                        self.assumed_timestamps[i - 1],
                                        self.assumed_velocities[i - 1],
                                        self.assumed_positions[i - 1])
-            self.mpctime += time.time() - tt
+                self.mpctime += time.time() - tt
 
             velocities, positions = self.mpcs[i].get_predicted_states()
 
@@ -447,7 +451,7 @@ def main(args):
     center = [0.2, -y_radius / 2]
     pts = 400
 
-    save_data = True
+    save_data = False
     filename = 'sim_dmpc' + '_' + '_'.join(vehicle_ids) + '_'
 
     pt = path.Path()
@@ -479,7 +483,7 @@ def main(args):
     if save_data:
         mpc.save_data_as_rosbag(filename)
 
-    mpc.plot_stuff()
+    # mpc.plot_stuff()
 
 
 if __name__ == '__main__':
