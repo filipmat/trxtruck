@@ -82,6 +82,8 @@ class CentralizedMPC(object):
 
         self.k = 0
 
+        self.mpctime = 0
+
     def run(self):
         """Runs the simulation. """
         print('Simulation started. Simulated duration {:.2f}.'.format(self.dt*self.iterations))
@@ -100,11 +102,15 @@ class CentralizedMPC(object):
             #     self._brake()
 
         elapsed_time = time.time() - start_time
-        average_time = elapsed_time / self.iterations
+        average_iteration_time = elapsed_time / self.iterations
+        average_mpc_time = self.mpctime / self.iterations
+        average_solver_iterations = self.mpc.solver_iterations / self.mpc.iterations
 
         print('Simulation completed. ')
-        print('Elapsed time {:.2f}, average iteration time {:.3f}'.format(
-            elapsed_time, average_time))
+        print('Elapsed time {:.2f}, average iteration time {:.4f}'.format(
+            elapsed_time, average_iteration_time))
+        print('Average MPC time {:.4f}, average solver iterations {:.2f}'.format(
+            average_mpc_time, average_solver_iterations))
         print('Mean square path error = {:.5f}'.format(numpy.mean(numpy.square(self.path_errors))))
         print('Mean square vel error = {:.5f}'.format(
             numpy.mean(numpy.square(self.velocity_errors))))
@@ -112,7 +118,11 @@ class CentralizedMPC(object):
     def _control(self):
         """Performs one control iteration. """
         x0s = self._get_x0s()  # Get initial conditions.
+
+        tt = time.time()
         self.mpc.solve_mpc(self.speed_profile, x0s)  # Solve MPC problem.
+        self.mpctime += time.time() - tt
+
         accelerations = self.mpc.get_instantaneous_accelerations()  # Get accelerations.
 
         # For each vehicle translate acceleration into speed control input. Get steering control
@@ -328,7 +338,6 @@ def main(args):
     vehicle_ids = []
     for i in range(vehicle_amount):
         vehicle_ids.append('v{}'.format(i + 1))
-    print(vehicle_ids)
 
     # PID parameters for path tracking.
     k_p = 0.5
@@ -383,10 +392,21 @@ def main(args):
     pt = path.Path()
     pt.gen_circle_path([x_radius, y_radius], points=pts, center=center)
 
+    start_distance = 0.5
+    path_len = pt.get_path_length()
+
     vehicles = []
     for vehicle_id in vehicle_ids:
-        vehicles.append(
-            trxmodel.Trx(x=[center[0], center[1] + y_radius, math.pi, 0], ID=vehicle_id))
+
+        theta = (len(vehicle_ids) - i - 1)*2*math.pi*start_distance/path_len + 0.1
+
+        xcoord = center[0] + x_radius*math.cos(theta)
+        ycoord = center[1] + y_radius*math.sin(theta)
+
+        x = [xcoord, ycoord, theta + math.pi/2, 0]
+        # x = [center[0], center[1] + y_radius, math.pi, 0]
+
+        vehicles.append(trxmodel.Trx(x=x, ID=vehicle_id))
 
     mpc = CentralizedMPC(vehicles, pt, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
                          safety_distance, timegap, k_p, k_i, k_d, simulation_length,
@@ -397,7 +417,7 @@ def main(args):
     if save_data:
         mpc.save_data_as_rosbag(filename)
 
-    mpc.plot_stuff()
+    # mpc.plot_stuff()
 
 
 if __name__ == '__main__':
