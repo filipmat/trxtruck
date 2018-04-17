@@ -396,7 +396,7 @@ def main(args):
     path_len = pt.get_path_length()
 
     vehicles = []
-    for vehicle_id in vehicle_ids:
+    for i, vehicle_id in enumerate(vehicle_ids):
 
         theta = (len(vehicle_ids) - i - 1)*2*math.pi*start_distance/path_len + 0.1
 
@@ -417,7 +417,7 @@ def main(args):
     if save_data:
         mpc.save_data_as_rosbag(filename)
 
-    # mpc.plot_stuff()
+    mpc.plot_stuff()
 
 
 if __name__ == '__main__':
