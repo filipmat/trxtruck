@@ -40,6 +40,9 @@ class MPC(object):
         self.zeta = zeta
         self.Q = Q
 
+        self.iterations = 0
+        self.solver_iterations = 0
+
         # Create problem.
         self.prob = cvxpy.Problem(cvxpy.Minimize(1))
 
@@ -101,6 +104,8 @@ class MPC(object):
 
         try:
             self.prob.solve(solver='ECOS')
+            self.iterations += 1
+            self.solver_iterations += self.prob.solver_stats.num_iters
         except cvxpy.error.SolverError as e:
             print('Could not solve MPC: {}'.format(e))
             print('status: {}'.format(self.prob.status))
@@ -149,7 +154,10 @@ class MPC(object):
         cost = self.v_slack_cost +  state_reference_cost + input_reference_cost
 
         if self.n > 1:
-            cost += self.safety_slack_cost + self.timegap_cost
+            cost += self.safety_slack_cost
+
+            if numpy.mean(xref[0::2]) > 0.1:
+                cost += self.timegap_cost
 
         return cost
 
