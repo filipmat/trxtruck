@@ -8,7 +8,6 @@ import sys
 import numpy
 import math
 import time
-import os
 
 from matplotlib import pyplot
 
@@ -29,6 +28,7 @@ class CentralizedMPC(object):
                  umin=None, umax=None, speed_ref=None):
 
         self.dt = delta_t
+        self.h = horizon
         self.iterations = int(simulation_length/self.dt)
 
         self.pt = vehicle_path
@@ -85,6 +85,7 @@ class CentralizedMPC(object):
     def run(self):
         """Runs the simulation. """
         print('Simulation started. Simulated duration {:.2f}.'.format(self.dt*self.iterations))
+        print('Horizon = {:.2f}, vehicles = {}.'.format(self.h, len(self.vehicles)))
         print('...')
 
         start_time = time.time()
@@ -95,8 +96,8 @@ class CentralizedMPC(object):
                 print('Iteration {}/{}'.format(self.k, self.iterations))
             self.k += 1
 
-            if self.k == 300:
-                self._brake()
+            # if self.k == 300:
+            #     self._brake()
 
         elapsed_time = time.time() - start_time
         average_time = elapsed_time / self.iterations
@@ -104,8 +105,9 @@ class CentralizedMPC(object):
         print('Simulation completed. ')
         print('Elapsed time {:.2f}, average iteration time {:.3f}'.format(
             elapsed_time, average_time))
-        print(numpy.mean(self.path_errors))
-        print(numpy.mean(self.velocity_errors))
+        print('Mean square path error = {:.5f}'.format(numpy.mean(numpy.square(self.path_errors))))
+        print('Mean square vel error = {:.5f}'.format(
+            numpy.mean(numpy.square(self.velocity_errors))))
 
     def _control(self):
         """Performs one control iteration. """
@@ -319,11 +321,14 @@ class CentralizedMPC(object):
 
 def main(args):
 
+    vehicle_amount = 1
     if len(args) > 1:
-        vehicle_ids = args[1:]
-    else:
-        print('Need to enter at least one vehicle ID. ')
-        sys.exit()
+        vehicle_amount = int(args[1])
+
+    vehicle_ids = []
+    for i in range(vehicle_amount):
+        vehicle_ids.append('v{}'.format(i + 1))
+    print(vehicle_ids)
 
     # PID parameters for path tracking.
     k_p = 0.5
@@ -350,7 +355,7 @@ def main(args):
     safety_distance = 0.2
     timegap = 1.
 
-    simulation_length = 60  # How many seconds to simulate.
+    simulation_length = 20  # How many seconds to simulate.
 
     xmin = numpy.array([velocity_min, position_min])
     xmax = numpy.array([velocity_max, position_max])
