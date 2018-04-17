@@ -101,6 +101,8 @@ class DistributedMPC(object):
 
         self.k = 0
 
+        self.mpctime = 0
+
     def run(self):
         """Runs the simulation. """
         print('Simulation started. Simulated duration {:.2f}.'.format(self.dt*self.iterations))
@@ -121,10 +123,16 @@ class DistributedMPC(object):
 
         elapsed_time = time.time() - start_time
         average_time = elapsed_time / self.iterations
+        average_mpc_time = self.mpctime / self.iterations
+        average_solver_iterations = 0
+        for mpc in self.mpcs:
+            average_solver_iterations += (mpc.solver_iterations / mpc.iterations) / len(self.mpcs)
 
         print('Simulation completed. ')
         print('Elapsed time {:.2f}, average iteration time {:.3f}'.format(
             elapsed_time, average_time))
+        print('Average MPC time {:.4f}, average solver iterations {:.2f}'.format(
+            average_mpc_time, average_solver_iterations))
         print('Mean square path error = {:.5f}'.format(numpy.mean(numpy.square(self.path_errors))))
         print('Mean square vel error = {:.5f}'.format(
             numpy.mean(numpy.square(self.velocity_errors))))
@@ -152,6 +160,7 @@ class DistributedMPC(object):
             self.assumed_timestamps[i, -(self.h + 1)] = self.k*self.dt
 
             # Solve MPC.
+            tt = time.time()
             if i == 0:
                 self.mpcs[i].solve_mpc(self.speed_profiles[i], x0)
             else:
@@ -160,6 +169,7 @@ class DistributedMPC(object):
                                        self.assumed_timestamps[i - 1],
                                        self.assumed_velocities[i - 1],
                                        self.assumed_positions[i - 1])
+            self.mpctime += time.time() - tt
 
             velocities, positions = self.mpcs[i].get_predicted_states()
 
