@@ -14,8 +14,11 @@ class FrenetPID(object):
         # Reference path.
         self.pt = path
 
+        self.sumy_alpha = 0
+        self.axle_distance = 0.33
+
     def get_omega(self, x, y, yaw, vel):
-        """Calculate the control input omega. """
+        """Calculate the control input omega. Used for unicycle model control. """
 
         index, closest = self.pt.get_closest([x, y])  # Closest point on path.
 
@@ -44,6 +47,38 @@ class FrenetPID(object):
                 gamma_pp * self.ey * cos_t * sin_t / (1 - gamma_p * self.ey))
 
         return omega
+
+    def get_alpha_prime(self, x, y, yaw, vel, alpha):
+        """Calculate the control input alpha. Used for bicycle model control. """
+
+        index, closest = self.pt.get_closest([x, y])  # Closest point on path.
+
+        self.ey = self.pt.get_ey([x, y])  # y error (distance from path)
+
+        self.sumy_alpha = self.sumy_alpha + self.ey  # Accumulated error.
+
+        gamma = self.pt.get_gamma(index)
+        gamma_p = self.pt.get_gammap(index)
+        gamma_pp = self.pt.get_gammapp(index)
+
+        cosa = math.cos(yaw - gamma + alpha)
+        sina = math.sin(yaw - gamma + alpha)
+
+        # y prime (derivative w.r.t. path).
+        yp = sina / cosa * (1 - gamma_p * self.ey) * self._sign(
+            vel * cosa / (1 - gamma_p * self.ey))
+
+        # PID controller.
+        u = - self.k_p * self.ey - self.k_d * yp - self.k_i * self.sumy_alpha
+
+        # Feedback linearization.
+        alphap = vel * cosa / (1 - gamma_p * self.ey) * (
+                u * cosa ** 2 / (1 - gamma_p * self.ey) +
+                gamma_p * (1 + sina ** 2) +
+                gamma_pp * self.ey * cosa * sina / (1 - gamma_p * self.ey)
+        ) - vel * math.sin(alpha) / self.axle_distance
+
+        return alphap
 
     @staticmethod
     def _sign(x):
