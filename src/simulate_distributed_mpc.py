@@ -26,7 +26,7 @@ class DistributedMPC(object):
 
     def __init__(self, vehicles, vehicle_path, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
                  safety_distance, timegap, k_p, k_i, k_d, simulation_length, xmin=None, xmax=None,
-                 umin=None, umax=None, speed_ref=None):
+                 umin=None, umax=None, speed_ref=None, delay=0.):
 
         self.pwm_min = 1500
         self.pwm_max = 1990
@@ -67,6 +67,13 @@ class DistributedMPC(object):
         self.assumed_velocities = numpy.zeros((self.n, assumed_state_length))
         self.assumed_positions = numpy.zeros((self.n, assumed_state_length))
 
+        # Safe past assumed states that will be used by follower vehicles, simulating a time delay.
+        self.saved_num = int(math.ceil(delay/self.dt)) + 1
+        self.current_saved = 0
+        self.saved_assumed_t = numpy.zeros((self.saved_num, self.n, assumed_state_length))
+        self.saved_assumed_v = numpy.zeros((self.saved_num, self.n, assumed_state_length))
+        self.saved_assumed_s = numpy.zeros((self.saved_num, self.n, assumed_state_length))
+
         self.frenets = []           # Path tracking.
         self.path_positions = []    # Longitudinal path positions.
         self.mpcs = []
@@ -98,6 +105,8 @@ class DistributedMPC(object):
 
         for i in range(len(self.vehicles)):
             self.assumed_positions[i, :] = self.path_positions[i].get_position()
+
+        self.saved_assumed_s[:] = self.assumed_positions
 
         self.k = 0
 
@@ -164,16 +173,27 @@ class DistributedMPC(object):
             self.assumed_positions[i, -(self.h + 1)] = pos
             self.assumed_timestamps[i, -(self.h + 1)] = self.k*self.dt
 
+            # Needed if delay = 0 so that current/instant state is updated.
+            self.saved_assumed_t[self.current_saved, i] = self.assumed_timestamps[i, :]
+            self.saved_assumed_v[self.current_saved, i] = self.assumed_velocities[i, :]
+            self.saved_assumed_s[self.current_saved, i] = self.assumed_positions[i, :]
+
             # Solve MPC.
             if i == 0:
                 self.mpcs[i].solve_mpc(self.speed_profiles[i], x0)
             else:
                 tt = time.time()
+
+                # Get the oldest saved assumed trajectory of preceding vehicle.
+                num = self.current_saved + 1
+                if num >= self.saved_num:
+                    num = 0
                 self.mpcs[i].solve_mpc(self.speed_profiles[i], x0,
-                                       self.assumed_timestamps[i, -(self.h + 1)],
-                                       self.assumed_timestamps[i - 1],
-                                       self.assumed_velocities[i - 1],
-                                       self.assumed_positions[i - 1])
+                                       self.saved_assumed_t[self.current_saved, i, -(self.h + 1)],
+                                       self.saved_assumed_t[num, i - 1],
+                                       self.saved_assumed_v[num, i - 1],
+                                       self.saved_assumed_s[num, i - 1])
+
                 self.mpctime += time.time() - tt
 
             velocities, positions = self.mpcs[i].get_predicted_states()
@@ -183,6 +203,11 @@ class DistributedMPC(object):
             self.assumed_positions[i, -(self.h + 1):] = positions
             self.assumed_timestamps[i, -(self.h + 1):] = \
                 self.assumed_timestamps[i, -(self.h + 1)] + self.dt * numpy.arange(self.h + 1)
+
+            # Save assumed states.
+            self.saved_assumed_t[self.current_saved, i] = self.assumed_timestamps[i, :]
+            self.saved_assumed_v[self.current_saved, i] = self.assumed_velocities[i, :]
+            self.saved_assumed_s[self.current_saved, i] = self.assumed_positions[i, :]
 
             # Get velocity control signal.
             acceleration = self.mpcs[i].get_instantaneous_acceleration()
@@ -216,6 +241,11 @@ class DistributedMPC(object):
             self.velocity_errors[i, self.k] = self.speed_profiles[i].get_speed_at(pos) - x[3]
             self.speed_inputs[i, self.k] = self.speed_pwms[i]
             self.steering_inputs[i, self.k] = self.angle_pwms[i]
+
+        # Increment counter that keeps track of where the newest assumed state should be saved. 
+        self.current_saved += 1
+        if self.current_saved >= self.saved_num:
+            self.current_saved = 0
 
     def _get_omega(self, vehicle_index, acceleration):
         """Returns the control input omega for the specified vehicle. """
@@ -429,7 +459,9 @@ def main(args):
     safety_distance = 0.2
     timegap = 1.
 
-    simulation_length = 20  # How many seconds to simulate.
+    delay = 0.45
+
+    simulation_length = 10  # How many seconds to simulate.
 
     xmin = numpy.array([velocity_min, position_min])
     xmax = numpy.array([velocity_max, position_max])
@@ -477,7 +509,8 @@ def main(args):
 
     mpc = DistributedMPC(vehicles, pt, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
                          safety_distance, timegap, k_p, k_i, k_d, simulation_length,
-                         xmin=xmin, xmax=xmax, umin=umin, umax=umax, speed_ref=speed_ref)
+                         xmin=xmin, xmax=xmax, umin=umin, umax=umax, speed_ref=speed_ref,
+                         delay=delay)
 
     mpc.run()
 
