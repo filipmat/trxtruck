@@ -143,7 +143,7 @@ class MPC(object):
 
     def _get_safety_constraints(self, current_time, preceding_timestamps, preceding_positions):
         """Returns the constraints for keeping a safety distance. Called each iteration. """
-        target_time = current_time - self.dt + numpy.arange(self.h + 1) * self.dt
+        target_time = current_time + numpy.arange(self.h + 1) * self.dt
         preceding_pos = numpy.interp(target_time, preceding_timestamps, preceding_positions)
 
         AX = sparse.kron(sparse.eye(self.h + 1), [0, 1])
