@@ -106,6 +106,7 @@ class DistributedMPC(object):
     def run(self):
         """Runs the simulation. """
         print('Simulation started. Simulated duration {:.2f}.'.format(self.dt*self.iterations))
+        print('Horizon = {:.2f}, vehicles = {}.'.format(self.h, len(self.vehicles)))
         print('...')
 
         start_time = time.time()
@@ -133,7 +134,7 @@ class DistributedMPC(object):
                 (self.mpcs[i].solver_iterations/self.mpcs[i].iterations) / (len(self.vehicles) - 1)
 
         print('Simulation completed. ')
-        print('Elapsed time {:.2f}, average iteration time {:.3f}'.format(
+        print('Elapsed time {:.2f}, average iteration time {:.4f}'.format(
             elapsed_time, average_time))
         print('Average MPC time {:.4f}, average solver iterations {:.2f}'.format(
             average_mpc_time, average_solver_iterations))
