@@ -67,6 +67,7 @@ class DistributedMPC(object):
         self.assumed_velocities = numpy.zeros((self.n, assumed_state_length))
         self.assumed_positions = numpy.zeros((self.n, assumed_state_length))
 
+        # TODO: also delay states used for path tracking.
         # Safe past assumed states that will be used by follower vehicles, simulating a time delay.
         self.saved_num = int(math.ceil(delay/self.dt)) + 1
         self.current_saved = 0
@@ -242,7 +243,7 @@ class DistributedMPC(object):
             self.speed_inputs[i, self.k] = self.speed_pwms[i]
             self.steering_inputs[i, self.k] = self.angle_pwms[i]
 
-        # Increment counter that keeps track of where the newest assumed state should be saved. 
+        # Increment counter that keeps track of where the newest assumed state should be saved.
         self.current_saved += 1
         if self.current_saved >= self.saved_num:
             self.current_saved = 0

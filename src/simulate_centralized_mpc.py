@@ -25,7 +25,7 @@ class CentralizedMPC(object):
 
     def __init__(self, vehicles, vehicle_path, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
                  safety_distance, timegap, k_p, k_i, k_d, simulation_length, xmin=None, xmax=None,
-                 umin=None, umax=None, speed_ref=None):
+                 umin=None, umax=None, speed_ref=None, delay=0.):
 
         self.dt = delta_t
         self.h = horizon
@@ -65,18 +65,25 @@ class CentralizedMPC(object):
         self.speed_inputs = numpy.zeros((self.n, self.iterations))
         self.steering_inputs = numpy.zeros((self.n, self.iterations))
 
+        # Save old initial positions used by MPC and path tracking to simulate communication delay.
+        # TODO: save old states instead so that path tracking is also delayed.
+        self.saved_num = int(math.ceil(delay/self.dt)) + 1
+        self.delay_counter = 0
+        self.delayed_states = numpy.zeros((self.saved_num, len(self.vehicles), 4))
+
         self.frenets = []           # Path tracking.
         self.path_positions = []    # Longitudinal path positions.
         self.speed_pwms = []        # Speed control signals.
         self.angle_pwms = []        # Wheel angle control signals.
 
         # Initialize lists.
-        for vehicle in self.vehicles:
+        for i, vehicle in enumerate(self.vehicles):
             x = vehicle.get_x()
             self.frenets.append(frenetpid.FrenetPID(vehicle_path, k_p, k_i, k_d))
             self.path_positions.append(path.PathPosition(vehicle_path, [x[0], x[1]]))
             self.speed_pwms.append(1500)
             self.angle_pwms.append(1500)
+            self.delayed_states[:, i, :] = x
 
         self._order_follower_path_positions()
 
@@ -93,6 +100,17 @@ class CentralizedMPC(object):
         start_time = time.time()
 
         while self.k < self.iterations:
+
+            # Store the current state at the index containing the oldest saved state.
+            for i, vehicle in enumerate(self.vehicles):
+                x = vehicle.get_x()
+                self.delayed_states[self.delay_counter, i, :] = x
+
+            # Increment counter.
+            self.delay_counter += 1
+            if self.delay_counter >= self.saved_num:
+                self.delay_counter = 0
+
             self._control()
             if self.k % int(5./self.dt) == 0:
                 print('Iteration {}/{}'.format(self.k, self.iterations))
@@ -117,6 +135,7 @@ class CentralizedMPC(object):
 
     def _control(self):
         """Performs one control iteration. """
+
         x0s = self._get_x0s()  # Get initial conditions.
 
         tt = time.time()
@@ -129,7 +148,7 @@ class CentralizedMPC(object):
         # input from Frenet controller.
         for i, vehicle in enumerate(self.vehicles):
             # Get velocity from acceleration and velocity control input from vehicle model.
-            x = vehicle.get_x()
+            x = self._get_delayed_x(i)
 
             v = self._get_vel(i, accelerations[i])
             self.speed_pwms[i] = self._get_throttle_input(i, v)
@@ -146,8 +165,8 @@ class CentralizedMPC(object):
             pos = self.path_positions[i].get_position()
 
             timegap = 0
-            if i > 0 and vehicle.get_vel() != 0:
-                timegap = (self.path_positions[i - 1].get_position() - pos) / vehicle.get_vel()
+            if i > 0 and x[3] != 0:
+                timegap = (self.path_positions[i - 1].get_position() - pos) / x[3]
 
             self.xx[i, self.k] = x[0]
             self.yy[i, self.k] = x[1]
@@ -162,11 +181,16 @@ class CentralizedMPC(object):
             self.speed_inputs[i, self.k] = self.speed_pwms[i]
             self.steering_inputs[i, self.k] = self.angle_pwms[i]
 
+    def _get_delayed_x(self, vehicle_index):
+        """Returns the delayed state for the vehicle. """
+        return self.delayed_states[self.delay_counter, vehicle_index, :]
+
     def _get_x0s(self):
         """Returns a stacked vector with the initial condition x0 = [v0, s0] for each vehicle. """
         x0s = numpy.zeros(2*len(self.vehicles))
         for i, vehicle in enumerate(self.vehicles):
-            x0s[i*2] = vehicle.get_vel()
+            x = self._get_delayed_x(i)
+            x0s[i*2] = x[3]
             x0s[i*2 + 1] = self.path_positions[i].get_position()
 
         return x0s
@@ -174,7 +198,7 @@ class CentralizedMPC(object):
     def _get_omega(self, vehicle_index, acceleration):
         """Returns the control input omega for the specified vehicle. """
         # TODO: check which variant of speed measurement gives correct path tracking.
-        pose = self.vehicles[vehicle_index].get_x()
+        pose = self._get_delayed_x(vehicle_index)
 
         v = pose[3]
         # v = trxmodel.throttle_input_to_linear_velocity(self.speed_pwms[vehicle_index])
@@ -186,7 +210,8 @@ class CentralizedMPC(object):
 
     def _get_vel(self, vehicle_index, acceleration):
         """Returns the new target velocity from the acceleration and current control signal. """
-        vel = self.vehicles[vehicle_index].get_vel() + acceleration * self.dt
+        x = self._get_delayed_x(vehicle_index)
+        vel = x[3] + acceleration * self.dt
 
         return vel
 
@@ -364,6 +389,8 @@ def main(args):
     safety_distance = 0.2
     timegap = 1.
 
+    delay = 0.
+
     simulation_length = 20  # How many seconds to simulate.
 
     xmin = numpy.array([velocity_min, position_min])
@@ -410,7 +437,8 @@ def main(args):
 
     mpc = CentralizedMPC(vehicles, pt, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
                          safety_distance, timegap, k_p, k_i, k_d, simulation_length,
-                         xmin=xmin, xmax=xmax, umin=umin, umax=umax, speed_ref=speed_ref)
+                         xmin=xmin, xmax=xmax, umin=umin, umax=umax, speed_ref=speed_ref,
+                         delay=delay)
 
     mpc.run()
 
