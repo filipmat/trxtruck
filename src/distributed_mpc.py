@@ -9,6 +9,7 @@ import rospy
 
 import numpy
 import sys
+import math
 
 import speed_profile
 import path
@@ -27,7 +28,7 @@ class Controller(object):
 
     def __init__(self, position_topic_name, control_topic_name, vehicle_id, preceding_id,
                  is_leader, vehicle_path, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
-                 safety_distance, timegap,
+                 safety_distance, timegap, delay=0.,
                  xmin=None, xmax=None, umin=None, umax=None, x0=None, speed_ref=None,
                  k_p=0., k_i=0., k_d=0., recording_service_name='dmpc/set_measurement',
                  recording_filename='dmpc'):
@@ -59,6 +60,13 @@ class Controller(object):
         self.velocities = numpy.zeros(assumed_state_length)
         self.positions = numpy.zeros(assumed_state_length)
         self.timestamps = numpy.zeros(assumed_state_length)
+
+        # Save old assumed states that will be published to simulate communication delay.
+        self.saved_num = int(math.ceil(delay/self.dt)) + 1
+        self.delay_counter = 0
+        self.delayed_velocities = numpy.zeros((self.saved_num, assumed_state_length))
+        self.delayed_positions = numpy.zeros((self.saved_num, assumed_state_length))
+        self.delayed_timestamps = numpy.zeros((self.saved_num, assumed_state_length))
 
         self.pt = vehicle_path      # Reference path for path tracking.
         self.path_position = path.PathPosition(self.pt)  # Keep track of longitudinal path position.
@@ -165,15 +173,15 @@ class Controller(object):
                     self.velocities[:] = data.v
                     self.positions[:] = self.path_position.get_position()
                     self.timestamps[:] = data.timestamp
+
+                    self.delayed_positions[:] = self.positions
+                    self.delayed_velocities[:] = self.velocities
+                    self.delayed_timestamps[:] = self.timestamps
+
                     self.first_callback = False
 
             else:
                 self.path_position.update_position([data.x, data.y])
-
-            try:
-                self._publish_assumed_state()
-            except:
-                pass
 
     def _publish_assumed_state(self):
         """Publishes the assumed state consisting of old and predicted states. """
@@ -182,6 +190,16 @@ class Controller(object):
         msg.timestamps = self.timestamps
         msg.velocity = self.velocities
         msg.position = self.positions
+
+        self.assumed_publisher.publish(msg)
+
+    def _publish_delayed_assumed_state(self):
+        """Publishes a delayed assumed state. """
+        msg = AssumedState()
+        msg.id = self.vehicle_id
+        msg.timestamps = self.delayed_timestamps[self.delay_counter, :]
+        msg.velocity = self.delayed_velocities[self.delay_counter, :]
+        msg.position = self.delayed_positions[self.delay_counter, :]
 
         self.assumed_publisher.publish(msg)
 
@@ -204,6 +222,19 @@ class Controller(object):
         # Solve MPC problem when not in starting phase.
         if not self.starting_phase:
             self._control()
+
+        # Publish delayed state.
+        self._publish_delayed_assumed_state()
+
+        # Save old states.
+        self.delayed_positions[self.delay_counter, :] = self.positions
+        self.delayed_velocities[self.delay_counter, :] = self.velocities
+        self.delayed_timestamps[self.delay_counter, :] = self.timestamps
+
+        # Increment delay counter.
+        self.delay_counter += 1
+        if self.delay_counter >= self.saved_num:
+            self.delay_counter = 0
 
         self.k += 1
 
@@ -231,8 +262,9 @@ class Controller(object):
         timegap = 0
         if not self.is_leader:
             try:
-                timegap = (self.preceding_positions[-(self.h + 1)] -
-                           self.path_position.get_position()) / self.pose[3]
+                pre_pos = numpy.interp(self.timestamp, self.preceding_timestamps,
+                                       self.preceding_positions)
+                timegap = (pre_pos - self.path_position.get_position()) / self.pose[3]
             except ZeroDivisionError:
                 timegap = 0
 
@@ -489,7 +521,7 @@ def main(args):
     k_d = 3
 
     # MPC information.
-    horizon = 10
+    horizon = 20
     delta_t = 0.1
     Ad = numpy.matrix([[1., 0.], [delta_t, 1.]])
     Bd = numpy.matrix([[delta_t], [0.]])
@@ -510,6 +542,8 @@ def main(args):
     truck_length = 0.2
     safety_distance = 0.1
     timegap = 1.
+
+    delay = 1.
 
     x0 = numpy.array([s0, v0])
     xmin = numpy.array([velocity_min, position_min])
@@ -541,7 +575,7 @@ def main(args):
         pt, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length, safety_distance, timegap,
         speed_ref=vopt, xmin=xmin, xmax=xmax, umin=umin, umax=umax, x0=x0,
         k_p=k_p, k_i=k_i, k_d=k_d, recording_service_name=recording_service_name,
-        recording_filename=recording_filename
+        recording_filename=recording_filename, delay=delay
     )
 
     # Start controller.
