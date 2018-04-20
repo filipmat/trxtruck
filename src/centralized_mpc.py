@@ -7,6 +7,7 @@ Centralized MPC controller.
 import rospy
 import sys
 import numpy
+import math
 
 import speed_profile
 import path
@@ -21,10 +22,9 @@ from trxtruck.srv import SetMeasurement, Command
 
 class CentralizedMPC(object):
 
-    def __init__(self, position_topic_name, control_topic_name, vehicle_ids,
-                 vehicle_path, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
-                 safety_distance, timegap, k_p, k_i, k_d,
-                 xmin=None, xmax=None, umin=None, umax=None, speed_ref=None,
+    def __init__(self, position_topic_name, control_topic_name, vehicle_ids, vehicle_path, Ad, Bd,
+                 delta_t, horizon, zeta, Q, R, truck_length, safety_distance, timegap, k_p, k_i,
+                 k_d, xmin=None, xmax=None, umin=None, umax=None, speed_ref=None, delay=0.,
                  recording_service_name='cmpc/set_measurement', recording_filename='cmpc'):
 
         rospy.init_node('centralized_mpc', anonymous=True)
@@ -61,6 +61,11 @@ class CentralizedMPC(object):
             speed_ref = speed_profile.Speed([1], [1])
         self.speed_profile = speed_ref
         self.original_speed_profile = speed_ref
+
+        # Save old initial positions used by MPC and path tracking to simulate communication delay.
+        self.saved_num = int(math.ceil(delay/self.dt)) + 1
+        self.delay_counter = 0
+        self.delayed_states = numpy.zeros((self.saved_num, len(self.vehicle_ids), 4))
 
         # Centralized MPC solver.
         self.mpc = solver_centralized_mpc.MPC(len(self.vehicle_ids), Ad, Bd, self.dt, horizon, zeta,
@@ -124,6 +129,17 @@ class CentralizedMPC(object):
                 print('Controller running ... ')
 
         if not self.starting_phase:
+
+            # Store the current state at the index containing the oldest saved state.
+            for i, vehicle_id in enumerate(self.vehicle_ids):
+                x = self.poses[vehicle_id]
+                self.delayed_states[self.delay_counter, i, :] = x
+
+            # Increment counter.
+            self.delay_counter += 1
+            if self.delay_counter >= self.saved_num:
+                self.delay_counter = 0
+
             self._control()
 
         self.k += 1
@@ -152,7 +168,10 @@ class CentralizedMPC(object):
         # input from Frenet controller.
         for i, vehicle_id in enumerate(self.vehicle_ids):
             # Get velocity from acceleration and velocity control input from vehicle model.
-            x = self.poses[vehicle_id]
+            #x = self.poses[vehicle_id]
+            x = self._get_delayed_x(i)
+
+            self.path_positions[vehicle_id].update_position([x[0], x[1]])
 
             v = self._get_vel(vehicle_id, accelerations[i])
             self.speed_pwms[vehicle_id] = self._get_throttle_input(vehicle_id, v)
@@ -196,25 +215,32 @@ class CentralizedMPC(object):
 
         self._publish_vehicle_commands()
 
-
         if print_info:
             print(info)
 
         self.control_iteration_time_sum += rospy.get_time() - start_time
 
+    def _get_delayed_x(self, vehicle_index):
+        """Returns the delayed state for the vehicle. """
+        return self.delayed_states[self.delay_counter, vehicle_index, :]
+
     def _get_x0s(self):
         """Returns a stacked vector with the initial condition x0 = [v0, s0] for each vehicle. """
         x0s = numpy.zeros(2*len(self.vehicle_ids))
         for i, vehicle_id in enumerate(self.vehicle_ids):
-            x0s[i*2] = self.poses[vehicle_id][3]
+            x = self._get_delayed_x(i)
+            x0s[i*2] = x[3]
             x0s[i*2 + 1] = self.path_positions[vehicle_id].get_position()
+            # x0s[i*2] = self.poses[vehicle_id][3]
+            # x0s[i*2 + 1] = self.path_positions[vehicle_id].get_position()
 
         return x0s
 
     def _get_omega(self, vehicle_id, acceleration):
         """Returns the control input omega for the specified vehicle. """
         # TODO: check which variant of speed measurement gives correct path tracking.
-        pose = self.poses[vehicle_id]
+        # pose = self.poses[vehicle_id]
+        pose = self._get_delayed_x(self.vehicle_ids.index(vehicle_id))
 
         v = pose[3]
         # v = trxmodel.throttle_input_to_linear_velocity(self.speed_pwms[vehicle_id])
@@ -226,14 +252,20 @@ class CentralizedMPC(object):
 
     def _get_vel(self, vehicle_id, acceleration):
         """Returns the new target velocity from the acceleration and current control signal. """
-        vel = self.poses[vehicle_id][3] + acceleration * self.dt
+        x = self._get_delayed_x(self.vehicle_ids.index(vehicle_id))
+        # vel = self.poses[vehicle_id][3] + acceleration * self.dt
+        vel = x[3] + acceleration * self.dt
 
         return vel
 
     def _get_throttle_input(self, vehicle_id, new_vel):
         """Returns the new control input for the vehicle. """
+        x = self._get_delayed_x(self.vehicle_ids.index(vehicle_id))
+
+        # pwm_diff = trxmodel.linear_velocity_to_throttle_input(new_vel) - \
+        #            trxmodel.linear_velocity_to_throttle_input(self.poses[vehicle_id][3])
         pwm_diff = trxmodel.linear_velocity_to_throttle_input(new_vel) - \
-                   trxmodel.linear_velocity_to_throttle_input(self.poses[vehicle_id][3])
+                   trxmodel.linear_velocity_to_throttle_input(x[3])
         speed_pwm = self.speed_pwms[vehicle_id] + pwm_diff
 
         return speed_pwm
@@ -271,8 +303,12 @@ class CentralizedMPC(object):
                 self.path_positions[data.id].update_position([data.x, data.y])
                 self.first_callbacks[data.id] = False
 
-        else:
-            self.path_positions[data.id].update_position([data.x, data.y])
+                # Save states in the delayed states array.
+                index = self.vehicle_ids.index(data.id)
+                self.delayed_states[:, index, :] = self.poses[data.id]
+
+        # else:
+        #     self.path_positions[data.id].update_position([data.x, data.y])
 
     def _start_stop_callback(self, data):
         """Callback for the subscriber on topic used for starting or stopping the controller. """
@@ -446,6 +482,8 @@ def main(args):
     safety_distance = 0.2
     timegap = 1.
 
+    delay = 0.2
+
     xmin = numpy.array([velocity_min, position_min])
     xmax = numpy.array([velocity_max, position_max])
     umin = numpy.array([acceleration_min])
@@ -474,7 +512,7 @@ def main(args):
                          pt, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
                          safety_distance, timegap, k_p, k_i, k_d, xmin=xmin, xmax=xmax, umin=umin,
                          umax=umax, speed_ref=vopt, recording_service_name=recording_service_name,
-                         recording_filename=recording_filename)
+                         recording_filename=recording_filename, delay=delay)
 
     mpc.run()
 
