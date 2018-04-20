@@ -216,9 +216,13 @@ class CentralizedMPC(object):
 
     def _get_throttle_input(self, vehicle_index, new_vel):
         """Returns the new control input for the vehicle. """
+        x = self._get_delayed_x(vehicle_index)
+
+        # pwm_diff = trxmodel.linear_velocity_to_throttle_input(new_vel) - \
+        #            trxmodel.linear_velocity_to_throttle_input(
+        #                self.vehicles[vehicle_index].get_vel())
         pwm_diff = trxmodel.linear_velocity_to_throttle_input(new_vel) - \
-                   trxmodel.linear_velocity_to_throttle_input(
-                       self.vehicles[vehicle_index].get_vel())
+                   trxmodel.linear_velocity_to_throttle_input(x[3])
         speed_pwm = self.speed_pwms[vehicle_index] + pwm_diff
 
         if speed_pwm > self.pwm_max:
@@ -388,7 +392,7 @@ def main(args):
     safety_distance = 0.2
     timegap = 1.
 
-    delay = 0.
+    delay = 0.25
 
     simulation_length = 20  # How many seconds to simulate.
 
