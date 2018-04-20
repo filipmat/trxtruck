@@ -66,7 +66,6 @@ class CentralizedMPC(object):
         self.steering_inputs = numpy.zeros((self.n, self.iterations))
 
         # Save old initial positions used by MPC and path tracking to simulate communication delay.
-        # TODO: save old states instead so that path tracking is also delayed.
         self.saved_num = int(math.ceil(delay/self.dt)) + 1
         self.delay_counter = 0
         self.delayed_states = numpy.zeros((self.saved_num, len(self.vehicles), 4))
