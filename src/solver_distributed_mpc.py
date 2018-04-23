@@ -29,6 +29,9 @@ class MPC(object):
         v_slack_cost_factor = 100
         self.v_slack = cvxpy.Variable(self.h + 1)
 
+        pos_slack_cost_factor = 100
+        self.pos_slack = cvxpy.Variable(self.h + 1)
+
         safety_slack_cost_factor = 100
         self.safety_slack = cvxpy.Variable(self.h + 1)
 
@@ -69,6 +72,7 @@ class MPC(object):
         x0_constraints = self._get_x0_constraint(x0)       # Update during mpc.
         dynamics_constraints = self._get_dynamics_constraints(Ad, Bd)
         slack_constraint_v, slack_constraint_safety = self._get_slack_constraints()
+        pos_slack_constraints = self._get_pos_slack_constraints()
 
         self.prob.constraints = state_constraint_lower
         self.prob.constraints += state_constraint_upper
@@ -81,9 +85,11 @@ class MPC(object):
         if not self.is_leader:
             # Update during mpc.
             self.prob.constraints += self._get_safety_constraints(0, [0], [0])
+        self.prob.constraints += pos_slack_constraints
 
         # Pre-compute costs for slack variables.
         self.v_slack_cost = self._get_v_slack_cost(v_slack_cost_factor)
+        self.pos_slack_cost = self._get_pos_slack_cost(pos_slack_cost_factor)
         self.safety_slack_cost = self._get_safety_slack_cost(safety_slack_cost_factor)
 
         # Pre-compute matrices used for cost calculation in order to speed up computation.
@@ -158,6 +164,13 @@ class MPC(object):
         """Returns the constraints that the slack variables are positive.
         Called on initialization. """
         constraint = [self.v_slack > 0], [self.safety_slack > 0]
+
+        return constraint
+
+    def _get_pos_slack_constraints(self):
+        """Returns the constraints that the position slack variable is positive. Called on
+        initialization. """
+        constraint = [self.pos_slack > 0]
 
         return constraint
 
@@ -251,7 +264,7 @@ class MPC(object):
         input_reference_cost = 0.5*cvxpy.quad_form(self.u, self.input_P) + \
                                self.R_diag.dot(uref) * self.u
 
-        cost = state_reference_cost + input_reference_cost + self.v_slack_cost
+        cost = state_reference_cost + input_reference_cost + self.v_slack_cost + self.pos_slack_cost
 
         if not self.is_leader and xgapref is not None:
 
@@ -281,6 +294,15 @@ class MPC(object):
         v_slack_P = numpy.eye(self.h + 1) * cost_factor
 
         cost = cvxpy.quad_form(self.v_slack, v_slack_P)
+
+        return cost
+
+    def _get_pos_slack_cost(self, cost_factor):
+        """Returns the cost function for the position slack variable. The cost is quadratic.
+        Called on initialization. """
+        pos_slack_P = numpy.eye(self.h + 1) * cost_factor
+
+        cost = cvxpy.quad_form(self.pos_slack, pos_slack_P)
 
         return cost
 
@@ -331,6 +353,14 @@ class MPC(object):
         pos = self.x0[1] + self.x0[0]*self.dt*numpy.arange(self.h + 1)
 
         return vel, pos
+
+    def add_position_constraint(self, position):
+        """Adds a constraint for maximum position. """
+        AX = sparse.kron(sparse.eye(self.h + 1), [0, 1])
+
+        constraint = [AX*self.x - self.pos_slack <= position]
+
+        self.prob.constraints += constraint
 
     @staticmethod
     def _interleave_vectors(a, b):
