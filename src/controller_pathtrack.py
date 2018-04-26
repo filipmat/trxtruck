@@ -68,7 +68,13 @@ class Controller(object):
             omega = self.frenet.get_omega(self.pose[0], self.pose[1], self.pose[2], self.pose[3])
             speed = self.v_ref
 
-            self.angle_pwm = trxmodel.angular_velocity_to_steering_input(omega, speed)
+            alpha = trxmodel.steering_input_to_wheel_angle(self.angle_pwm)
+            alpha_prime = self.frenet.get_alpha_prime(self.pose[0], self.pose[1], self.pose[2],
+                                                      self.pose[3], alpha)
+            new_alpha = alpha + self.dt*alpha_prime
+
+            self.angle_pwm = trxmodel.wheel_angle_to_steering_input(new_alpha)
+            # self.angle_pwm = trxmodel.angular_velocity_to_steering_input(omega, speed)
             self.speed_pwm = trxmodel.linear_velocity_to_throttle_input(speed)
 
             # Publish control commands to the topic.
