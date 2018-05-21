@@ -8,6 +8,7 @@ import sys
 import numpy
 import math
 import time
+import random
 
 from matplotlib import pyplot
 
@@ -25,13 +26,15 @@ class CentralizedMPC(object):
 
     def __init__(self, vehicles, vehicle_path, Ad, Bd, delta_t, horizon, zeta, Q, R, truck_length,
                  safety_distance, timegap, k_p, k_i, k_d, simulation_length, xmin=None, xmax=None,
-                 umin=None, umax=None, speed_ref=None, delay=0.):
+                 umin=None, umax=None, speed_ref=None, delay=0., variance=0.):
 
         self.dt = delta_t
         self.h = horizon
         self.iterations = int(simulation_length/self.dt)
 
         self.pt = vehicle_path
+
+        self.variance = variance
 
         self.timegap = timegap
 
@@ -118,6 +121,11 @@ class CentralizedMPC(object):
             # if self.k == 300:
             #     self._brake()
 
+            # if self.k == 300:
+            #     maxpos = self.path_positions[0].get_position() + 5
+            #     print('Added constraint pos < {:.3f}'.format(maxpos))
+            #     self.mpc.add_position_constraint(maxpos)
+
         elapsed_time = time.time() - start_time
         average_iteration_time = elapsed_time / self.iterations
         average_mpc_time = self.mpctime / self.iterations
@@ -189,8 +197,8 @@ class CentralizedMPC(object):
         x0s = numpy.zeros(2*len(self.vehicles))
         for i, vehicle in enumerate(self.vehicles):
             x = self._get_delayed_x(i)
-            x0s[i*2] = x[3]
-            x0s[i*2 + 1] = self.path_positions[i].get_position()
+            x0s[i*2] = x[3] + random.gauss(0, self.variance)
+            x0s[i*2 + 1] = self.path_positions[i].get_position() + random.gauss(0, self.variance)
 
         return x0s
 
@@ -274,11 +282,8 @@ class CentralizedMPC(object):
         ax.set_title('Speed space')
         for i in range(len(self.vehicles)):
             pyplot.plot(self.positions[i], self.velocities[i], label=self.vehicles[i].ID)
-        voptend = numpy.argmax(self.speed_profile.pos > numpy.max(self.positions))
-        if voptend == 0:
-            voptend = len(self.speed_profile.pos)
-        pyplot.plot(self.speed_profile.pos[:voptend], self.speed_profile.vel[:voptend],
-                    label='reference')
+        vref = self.original_speed_profile.get_speed_at(self.positions[0])
+        pyplot.plot(self.positions[0], vref, label='reference')
         pyplot.legend(loc='upper right')
 
         ax = pyplot.subplot(323)
@@ -298,6 +303,12 @@ class CentralizedMPC(object):
         ax.set_title('Acceleration')
         for i in range(len(self.vehicles)):
             pyplot.plot(self.timestamps[i], self.accelerations[i], label = self.vehicles[i].ID)
+        pyplot.legend(loc='upper right')
+
+        ax = pyplot.subplot(326)
+        ax.set_title('Position')
+        for i in range(len(self.vehicles)):
+            pyplot.plot(self.timestamps[i], self.positions[i], label = self.vehicles[i].ID)
         pyplot.legend(loc='upper right')
 
         pyplot.tight_layout(pad=0.5, w_pad=0.5, h_pad=2)
@@ -372,7 +383,7 @@ def main(args):
     k_i = -0.02
     k_d = 3
 
-    horizon = 10
+    horizon = 15
     delta_t = 0.1
     Ad = numpy.matrix([[1., 0.], [delta_t, 1.]])
     Bd = numpy.matrix([[delta_t], [0.]])
@@ -386,15 +397,15 @@ def main(args):
     velocity_max = 2.
     position_min = -100000.
     position_max = 1000000.
-    acceleration_min = -0.5
-    acceleration_max = 0.5
+    acceleration_min = -1.5
+    acceleration_max = 1.5
     truck_length = 0.3
     safety_distance = 0.2
     timegap = 1.
 
-    delay = 0.25
+    delay = 0.3
 
-    simulation_length = 20  # How many seconds to simulate.
+    simulation_length = 40  # How many seconds to simulate.
 
     xmin = numpy.array([velocity_min, position_min])
     xmax = numpy.array([velocity_max, position_max])
@@ -416,8 +427,9 @@ def main(args):
     center = [0.2, -y_radius / 2]
     pts = 400
 
-    save_data = False
-    filename = 'sim_cmpc' + '_' + '_'.join(vehicle_ids) + '_'
+    plot_data = True
+    save_data = True
+    filename = 'measurements/sim_cmpc' + '_' + '_'.join(vehicle_ids) + '_'
 
     pt = path.Path()
     pt.gen_circle_path([x_radius, y_radius], points=pts, center=center)
@@ -448,7 +460,8 @@ def main(args):
     if save_data:
         mpc.save_data_as_rosbag(filename)
 
-    mpc.plot_stuff()
+    if plot_data:
+        mpc.plot_stuff()
 
 
 if __name__ == '__main__':
