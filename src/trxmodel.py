@@ -137,6 +137,20 @@ def angular_velocity_to_steering_input(angular_velocity, linear_velocity):
     return steering_input
 
 
+def angular_velocity_to_steering_input_2(angular_velocity, linear_velocity):
+    """Alternative conversion. """
+    k = -1./275
+    m = 2 + 1000./275
+
+    if linear_velocity > 0:
+        radius = angular_velocity/linear_velocity
+        steering_input = (radius - m)/k
+    else:
+        steering_input = 1500
+
+    return steering_input
+
+
 def steering_input_to_angular_velocity(steering_input, linear_velocity):
     """Returns the angular velocity corresponding to the steering input at the given linear
     velocity.
