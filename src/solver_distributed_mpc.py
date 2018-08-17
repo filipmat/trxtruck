@@ -101,7 +101,7 @@ class MPC(object):
         self.timegap_Q_diag = sparse.kron(sparse.eye(self.h + 1), -zeta * Q)
         self.R_diag = sparse.kron(sparse.eye(self.h), -R)
 
-        self.timegap_shift = int(round(self.timegap / self.dt))
+        # self.timegap_shift = int(round(self.timegap / self.dt))
 
     def _get_lower_state_constraints(self, xmin):
         """Returns the lower constraints for the states. Called on initialization. """
@@ -279,7 +279,7 @@ class MPC(object):
 
     def _get_xgap_ref(self, current_time, timestamps, velocities, positions):
         """Returns the reference state for tracking the timegap of the preceding vehicle. """
-        target_time = current_time - self.timegap + numpy.arange(self.h + 1)*self.dt
+        target_time = current_time - self.timegap + numpy.arange(self.h + 1)*self.dt + self.dt
 
         gap_vel = numpy.interp(target_time, timestamps, velocities)
         gap_pos = numpy.interp(target_time, timestamps, positions)
